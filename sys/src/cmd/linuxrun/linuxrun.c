@@ -57,6 +57,7 @@ enum {
 	Efault = 14,
 	Einval = 22,
 	Enotty = 25,
+	Espipe = 29,
 	Enosys = 38,
 
 	/* Linux open flags */
@@ -100,6 +101,13 @@ int started;
 ulong entrypc;
 ulong mainentry;	/* AT_ENTRY: the main program's entry */
 ulong stacktop;
+uchar trapinsn[2] = {0x0f, 0x0b};
+/* fork/clone child resume state: the child cannot noted() after rfork,
+ * so it bounces off the ud2 starter and the handler installs these */
+Ureg forkregs;
+int forkpending;
+int forksnap;
+int forkready[2];
 Phdr ph[Maxph];
 int nph;
 ulong brkcur;
@@ -110,22 +118,22 @@ int ldtfd = -1;
  * text.  Point it at the TLS entry like %gs. */
 ulong tlsselector = 0x33;
 
-/* Attach the private note stack and tell the kernel its top address:
- * without it, notify() builds note frames below the guest sp, and the
- * lazy PLT resolver - which keeps live working data below its sp
- * across the syscalls it makes - reads back kernel/host pointers and
- * jumps to them. */
+/* Tell the kernel the note-stack top.  Without it, notify() builds
+ * note frames below the guest sp, and the lazy PLT resolver - which
+ * keeps live working data below its sp across the syscalls it makes -
+ * reads back kernel/host pointers and jumps to them. */
+static ulong notestackva;
+
 static ulong
-attachnotestack(ulong va)
+registernotestack(void)
 {
 	int fd;
 	uchar buf[4];
 	ulong top;
-	extern void* segattach(int, char*, void*, ulong);
 
-	if(segattach(0, "shared", (void*)va, 32*1024) == (void*)-1)
+	if(notestackva == 0)
 		return 0;
-	top = va + 32*1024;
+	top = notestackva + 32*1024;
 	buf[0] = top & 0xFF;
 	buf[1] = (top>>8) & 0xFF;
 	buf[2] = (top>>16) & 0xFF;
@@ -137,9 +145,32 @@ attachnotestack(ulong va)
 	}
 	if(fd < 0)
 		return 0;
-	write(fd, buf, 4);
+	if(write(fd, buf, 4) < 4)
+		return 0;
 	close(fd);
 	return top;
+}
+
+/* Attach the private note stack (once per process tree: fork children
+ * inherit the segment COW and only re-register it - segment slots are
+ * scarce and the child's slots are already full of guest memory). */
+static ulong
+attachnotestack(void)
+{
+	ulong va;
+	extern void* segattach(int, char*, void*, ulong);
+
+	/* "memory", never "shared": a shared note-stack segment would
+	 * let a forked child (which resumes at our exact sp inside the
+	 * rfork) push frames over our live handler frames.  Private
+	 * pages give each child a COW copy instead. */
+	va = (ulong)segattach(0, "memory", nil, 32*1024);
+	if(va == (ulong)-1){
+		fprint(2, "linuxrun: notestack segattach: %r\n");
+		return 0;
+	}
+	notestackva = va;
+	return registernotestack();
 }
 int tlsfsokay;
 int initedtls;
@@ -153,6 +184,8 @@ int nguestsegs;
 int listenerfd = -1;	/* read end of the active listener pipe */
 char *genv[] = {
 	"LD_BIND_NOW=1",
+	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
+	"HOME=/root",
 	nil,};
 
 /* epoll: a table of registered fds per epoll fd; wait reports every
@@ -399,6 +432,12 @@ buildstack(int nargs, char **args)
 	execfnva = argv[0];
 	platformva = strp - 8;
 	strcpy((char*)st + (platformva - Stackbase), "i686");
+	/* the vsyscall thunk lives in the stack segment: it survives
+	 * every exec (buildstack rewrites it) and nothing unmaps it */
+	sysinfova = Stackbase + Stacksize - 2048;
+	st[sysinfova - Stackbase] = 0x0f;
+	st[sysinfova - Stackbase + 1] = 0x0b;
+	st[sysinfova - Stackbase + 2] = 0xc3;
 	randva = platformva - 32;
 	for(i = 0; i < 16; i++)
 		st[randva - Stackbase + i] = nsec() >> (i*3);
@@ -611,7 +650,10 @@ fillstat64(ulong addr, int fd)
 		return -Ebadf;
 	b = (uchar*)addr;
 	memset(b, 0, 96);
-	*(ulong*)(b+16) = 0x81a4;		/* S_IFREG|0444 */
+	if(d->mode & DMDIR)
+		*(ulong*)(b+16) = 0x41ed;	/* S_IFDIR|0755 */
+	else
+		*(ulong*)(b+16) = 0x81a4;	/* S_IFREG|0444 */
 	*(ulong*)(b+20) = 1;			/* nlink */
 	*(ulong*)(b+12) = (ulong)d->qid.path;	/* __st_ino */
 	*(vlong*)(b+88) = d->qid.path;	/* st_ino: ld.so dedups libraries
@@ -711,6 +753,21 @@ initsysinfo(void)
 
 
 /* ---- AF_UNIX over plan9 pipes ---- */
+/* Bridge socket fds pack the pipe ends as (read<<16)|write; plain
+ * fds pass through unchanged.  Plan 9 fd numbers stay far below
+ * 0x10000 in practice, so the packing is unambiguous. */
+static int
+sockreadfd(int fd)
+{
+	return (fd >= 0x10000) ? (fd >> 16) : fd;
+}
+
+static int
+sockwritefd(int fd)
+{
+	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
+}
+
 static long
 sysbindlisten(ulong path)
 {
@@ -719,6 +776,8 @@ sysbindlisten(ulong path)
 
 	if(path == 0)
 		return -Efault;
+	if(((uchar*)path)[0] == 0)	/* abstract sockets have no file name */
+		return -Eacces;
 	if(pipe(p) < 0)
 		return -Enomem;
 	snprint(req, sizeof req, "%s.req", (char*)path);
@@ -743,6 +802,7 @@ sysbindlisten(ulong path)
 }
 
 static int sscanf3(char*, int*, int*, int*);
+static int traphandler(void*, char*);
 
 static long
 sysconnect(ulong path)
@@ -848,11 +908,11 @@ dosocketcall(ulong subop, ulong argsp)
 	case 1:		/* socket(a0=domain,a1=type,a2=proto): AF_UNIX only */
 		r = (a[0] == 1) ? 0 : -Eacces;
 		break;
-	case 2:		/* bind(fd,a1=addr,a2=len) */
-		r = sysbindlisten(a[1]);
+	case 2:		/* bind(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
+		r = sysbindlisten(a[1] + 2);
 		break;
-	case 3:		/* connect(fd,a1=addr,a2=len) */
-		r = sysconnect(a[1]);
+	case 3:		/* connect(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
+		r = sysconnect(a[1] + 2);
 		break;
 	case 4:		/* listen */
 	case 13:	/* shutdown */
@@ -878,13 +938,13 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 9:		/* send(fd,a1=buf,a2=len) */
 	case 11:	/* sendto(fd,a1,a2,a3,a4) */
-		r = write((int)a[0], (void*)a[1], a[2]);
+		r = write(sockwritefd((int)a[0]), (void*)a[1], a[2]);
 		if(r < 0)
 			r = -Ebadf;
 		break;
 	case 10:	/* recv(fd,a1=buf,a2=len) */
 	case 12:	/* recvfrom(fd,a1,a2,a3,a4) */
-		r = read((int)a[0], (void*)a[1], a[2]);
+		r = read(sockreadfd((int)a[0]), (void*)a[1], a[2]);
 		if(r < 0)
 			r = -Ebadf;
 		break;
@@ -893,7 +953,7 @@ dosocketcall(ulong subop, ulong argsp)
 			struct Liovec *v;
 
 			v = (struct Liovec*)a[1];
-			r = write((int)a[0], v[0].base, v[0].len);
+			r = write(sockwritefd((int)a[0]), v[0].base, v[0].len);
 			if(r < 0)
 				r = -Ebadf;
 		}
@@ -903,7 +963,7 @@ dosocketcall(ulong subop, ulong argsp)
 			struct Liovec *v;
 
 			v = (struct Liovec*)a[1];
-			r = read((int)a[0], v[0].base, v[0].len);
+			r = read(sockreadfd((int)a[0]), v[0].base, v[0].len);
 			if(r < 0)
 				r = -Ebadf;
 		}
@@ -956,12 +1016,22 @@ dofutex(ulong addr, ulong op, ulong val, ulong utime)
 {
 	switch(op & 127){
 	case 0:		/* WAIT: poll; the waiters re-check shared memory */
-		for(;;){
-			if(*(int*)addr != (int)val)
-				return 0;
-			if(utime != 0)
-				return -110;	/* -ETIMEDOUT */
-			sleep(1);
+		{
+			int i;
+
+			for(i = 0; i < 1000; i++){
+				if(*(int*)addr != (int)val)
+					return 0;
+				if(utime != 0)
+					return -110;	/* -ETIMEDOUT */
+				sleep(1);
+			}
+			/* Give up with a spurious wakeup (legal futex
+			 * behavior): a forked child waits on a private
+			 * copy of the word that nobody else maps, so an
+			 * honest wait would hang it forever.  The caller
+			 * re-checks and re-waits if it disagrees. */
+			return 0;
 		}
 	case 1:		/* WAKE */
 	case 3:		/* REQUEUE */
@@ -979,7 +1049,7 @@ countargs(char **a)
 
 	for(n = 0; a != nil && a[n] != nil; n++)
 		;
-	return n+1;	/* argv[0] always present */
+	return n;
 }
 
 /* execve in place: drop the guest image, load the new one; the trap
@@ -1058,6 +1128,10 @@ sysexecve(char *path, char **gargv)
 		close(ifd);
 		entrypc = interpbase + ieh.entry;
 	}
+	/* the exec wiped the arena segment with the rest of the old
+	 * image; the new one starts brk/mmap from scratch and needs
+	 * it back */
+	segat(Mapbase, Mapsize);
 	stacktop = buildstack(countargs(gargv), gargv);
 	return 0;
 }
@@ -1082,12 +1156,12 @@ dosyscall(Ureg *ur)
 		exits(exitstr);
 		return 0;
 	case 3:		/* read */
-		r = read((int)a1, (void*)a2, a3);
+		r = read(sockreadfd((int)a1), (void*)a2, a3);
 		if(r < 0)
 			r = -Ebadf;
 		break;
 	case 4:		/* write */
-		r = write((int)a1, (void*)a2, a3);
+		r = write(sockwritefd((int)a1), (void*)a2, a3);
 		if(r < 0)
 			r = -Ebadf;
 		break;
@@ -1118,7 +1192,12 @@ dosyscall(Ureg *ur)
 		}
 		break;
 	case 6:		/* close */
-		close((int)a1);
+		if(a1 >= 0x10000UL){
+			/* bridge socket fd: both pipe ends */
+			close((int)(a1 >> 16));
+			close((int)(a1 & 0xffff));
+		}else
+			close((int)a1);
 		r = 0;
 		break;
 	case 8:		/* creat */
@@ -1167,18 +1246,46 @@ dosyscall(Ureg *ur)
 	case 91:	/* munmap */
 		r = 0;
 		break;
+	case 140:	/* _llseek(fd, hi, lo, result*, whence) */
+		{
+			vlong off;
+			ulong *resp;
+
+			off = seek((int)a1, ((vlong)(long)a2<<32) | (a3 & 0xffffffffUL), (int)a5);
+			resp = (ulong*)a4;
+			if(resp == nil)
+				r = -Einval;
+			else if(off < 0)
+				r = -Espipe;	/* pipes: what Linux returns */
+			else{
+				resp[0] = (ulong)off;
+				resp[1] = (ulong)((uvlong)off >> 32);
+				r = 0;
+			}
+		}
+		break;
+	case 199:	/* getuid32 */
+	case 200:	/* getgid32 */
+	case 201:	/* geteuid32 */
+	case 202:	/* getegid32: shells' privilege-drop checks read these */
+		r = 0;
+		break;
+	case 183:	/* getcwd: dash prints a warning without it */
+		if(a1 == 0)
+			r = -Efault;
+		else{
+			char wdb[1024];
+
+			if(getwd(wdb, sizeof wdb) == nil)
+				r = -Enoent;
+			else{
+				strcpy((char*)a1, wdb);
+				r = a1;
+			}
+		}
+		break;
 	case 122:	/* uname */
 		r = sysuname(a1);
-		break;
-	case 140:	/* _llseek: fd, hi, lo, result*, whence */
-		{
-			vlong o;
-
-			o = seek((int)a1, ((vlong)a2<<32) | a3, ur->di);
-			if(ur->si != 0)
-				*(vlong*)ur->si = o;
-			r = 0;
-		}
 		break;
 	case 145:	/* readv */
 		r = sysreadv(a1, a2, a3);
@@ -1359,10 +1466,16 @@ dosyscall(Ureg *ur)
 	case 2:		/* fork */
 	case 120:	/* clone: threads share the guest "shared" segments */
 		{
-			int pid;
+			int pid, mfd;
+			void (*starter)(void);
 
+			if(pipe(forkready) < 0)
+				forkready[0] = forkready[1] = -1;
+			/* RFFDG copies the fd table (Linux fork semantics):
+			 * RFCFDG would empty it, leaving the child without
+			 * fd 2 and without the forkready pipe */
 			pid = rfork(RFPROC|RFFDG|RFNOTEG);
-					if(pid < 0)
+			if(pid < 0)
 				r = -Enomem;
 			else if(pid == 0){
 				if(ldtfd >= 0){
@@ -1371,51 +1484,50 @@ dosyscall(Ureg *ur)
 				}
 				initedtls = 0;
 				listenerfd = -1;
-				attachnotestack(0x5e000000 + (getpid() & 7)*0x10000);
-				if(nr == 120 && (a1 & LcVmnul)){
-					/* a thread: keep sharing the image */
-					if(a2 != 0)
-						ur->sp = a2;
-				}else{
-					/* a fork: the child must NOT share the
-					 * parent's guest memory (libc mutates
-					 * its own state after fork) - take a
-					 * private snapshot of every segment */
-					int s;
-					ulong va, len;
-					uchar *tmp;
-
-					for(s = 0; s < nguestsegs; s++){
-						va = guestsegs[s][0];
-						len = guestsegs[s][1];
-						if(va == Stackbase)
-							continue;	/* stack handled below */
-						tmp = malloc(len);
-						if(tmp == nil)
-							exits("fork snapshot");
-						memmove(tmp, (void*)va, len);
-						segdetach((void*)va);
-						if(segattach(0, "memory", (void*)va, len) == (void*)-1)
-							exits("fork attach");
-						memmove((void*)va, tmp, len);
-						free(tmp);
-					}
-					/* the stack segment too (excluded above) */
-					va = Stackbase;
-					len = Stacksize;
-					tmp = malloc(len);
-					if(tmp == nil)
-						exits("fork stack");
-					memmove(tmp, (void*)va, len);
-					segdetach((void*)va);
-					if(segattach(0, "memory", (void*)va, len) == (void*)-1)
-						exits("fork attach");
-					memmove((void*)va, tmp, len);
-					free(tmp);
+				if(forkready[0] >= 0)
+					close(forkready[0]);
+				/* the note-stack segment came along COW: just
+				 * re-register it (a fresh attach would need
+				 * a segment slot the child does not have) */
+				registernotestack();
+				/* rfork left us without note state and without
+				 * the foreign mark: re-register both */
+				atnotify(traphandler, 1);
+				mfd = open("/dev/mark", OWRITE);
+				if(mfd >= 0){
+					write(mfd, "1", 1);
+					close(mfd);
 				}
+				forksnap = !(nr == 120 && (a1 & LcVmnul));
+				if(!forksnap && a2 != 0)
+					ur->sp = a2;	/* thread switch stack */
+				/* Returning through the handler would call
+				 * noted() without a pending note and kill us.
+				 * Bounce off our own ud2 starter instead:
+				 * that note arrives on our private note
+				 * stack, where the handler takes the private
+				 * snapshot and installs the registers saved
+				 * below.  Nothing here may use more stack
+				 * than a handful of frames: we are still on
+				 * the parent's shared note stack until the
+				 * starter note fires. */
 				ur->ax = 0;
-				return 0;
+				forkregs = *ur;
+				forkregs.pc = ur->pc + 2;
+				forkpending = 1;
+				starter = (void(*)(void))trapinsn;
+				starter();
+				exits("fork child");	/* not reached */
 			}else{
+				/* hold the shared note stack until the child
+				 * has finished on its own */
+				if(forkready[0] >= 0){
+					char b[1];
+
+					close(forkready[1]);
+					read(forkready[0], b, 1);
+					close(forkready[0]);
+				}
 				r = pid;
 				if(nr == 120 && (a1 & LcVmnul) && a5 != 0)
 					*(ulong*)a5 = pid;
@@ -1424,17 +1536,40 @@ dosyscall(Ureg *ur)
 		break;
 	case 11:	/* execve */
 		{
-			char *gargv[256];
+			static char *gargv[256];
+			static char argstr[8192];
+			static char pathbuf[256];
 			ulong *ap;
-			int na;
+			int na, j, k;
 
+			/* copy the strings now: sysexecve detaches the old
+			 * image (including the guest stack they live on)
+			 * before buildstack reads them back */
+			j = 0;
+			k = 0;
 			ap = (ulong*)a2;
-			for(na = 0; na < 255 && ap != nil && ap[na] != 0; na++)
-				gargv[na] = (char*)ap[na];
+			for(na = 0; na < 255 && ap != nil && ap[na] != 0; na++){
+				int m;
+
+				m = strlen((char*)ap[na]);
+				if(k + m + 1 >= sizeof argstr)
+					break;
+				strcpy(argstr + k, (char*)ap[na]);
+				gargv[na] = argstr + k;
+				k += m + 1;
+			}
 			gargv[na] = nil;
-			r = sysexecve((char*)a1, gargv);
+			if(a1 != 0){
+				strncpy(pathbuf, (char*)a1, sizeof pathbuf - 1);
+				pathbuf[sizeof pathbuf - 1] = 0;
+			}else
+				pathbuf[0] = 0;
+			r = sysexecve(pathbuf, gargv);
 			if(r == 0){
-				ur->pc = entrypc;
+				/* the handler adds 2 for the syscall insn we
+				 * replaced: pre-compensate so the guest
+				 * enters at the true entry, not entry+2 */
+				ur->pc = entrypc - 2;
 				ur->sp = stacktop;
 				ur->ax = 0;
 				ur->bx = 0;
@@ -1592,6 +1727,7 @@ dosyscall(Ureg *ur)
 		r = 0;
 		break;
 	case 55:	/* fcntl */
+	case 221:	/* fcntl64 */
 		switch(a2){
 		case 0:	/* F_DUPFD */
 			r = dup((int)a1, -1);
@@ -1608,13 +1744,33 @@ dosyscall(Ureg *ur)
 	case 66:	/* setsid */
 		r = 0;
 		break;
-	case 61:	/* getppid */
+	case 64:	/* getppid (61 is ustat) */
 		r = 1;
 		break;
-	case 30:	/* umask */
+	case 114:	/* wait4(-1, status*, 0, nil): reap one child */
+		{
+			Waitmsg *w;
+
+			w = wait();
+			if(w == nil)
+				r = -10;	/* -ECHILD */
+			else{
+				if(a2 != 0)
+					*(int*)a2 = strtol(w->msg, nil, 16) << 8;
+				r = w->pid;
+				free(w);
+			}
+		}
+		break;
+	case 60:	/* umask */
+	case 30:	/* utime */
 	case 15:	/* chmod */
 	case 16:	/* lchown */
 	case 212:	/* chown32 */
+	case 213:	/* setuid32: Popen children _exit(127) if it fails */
+	case 214:	/* setgid32 */
+	case 23:	/* setuid */
+	case 46:	/* setgid */
 	case 94:	/* setgroups */
 		r = 0;
 		break;
@@ -1655,6 +1811,12 @@ traphandler(void *v, char *msg)
 			ur->bp = 0;
 			return 1;
 		}
+		if(forkpending){
+			/* a fork/clone child bouncing off the starter */
+			forkpending = 0;
+			*ur = forkregs;
+			return 1;
+		}
 		ur->ax = dosyscall(ur);
 		ur->pc += 2;
 		return 1;
@@ -1672,6 +1834,10 @@ traphandler(void *v, char *msg)
 			stk = (ulong*)ur->sp;
 			for(i = 0; i < 12; i++)
 				fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);
+						if(ur->bp > ur->sp && ur->bp < ur->sp + 0x800)
+				for(i = -2; i < 10; i++)
+					fprint(2, "linuxrun:  bp%+d = %lux\n", i*4,
+						((ulong*)ur->bp)[i]);
 		}
 		return 0;
 	}
@@ -1691,14 +1857,46 @@ traphandler(void *v, char *msg)
 		ur->bp = 0;
 		return 1;
 	}
+	if(forkpending){
+		/* a fork/clone child bouncing off the starter: we are on
+		 * our own note stack now, so it is safe to privatize the
+		 * guest image (the parent is parked on the forkready
+		 * pipe and cannot touch the shared segments) */
+		forkpending = 0;
+		*ur = forkregs;
+		if(forksnap){
+			int s;
+			ulong va, len;
+			uchar *tmp;
+
+			forksnap = 0;
+			for(s = 0; s < nguestsegs; s++){
+				va = guestsegs[s][0];
+				len = guestsegs[s][1];
+				tmp = malloc(len);
+				if(tmp == nil)
+					exits("fork snapshot");
+				memmove(tmp, (void*)va, len);
+				segdetach((void*)va);
+				if(segattach(0, "memory", (void*)va, len) == (void*)-1)
+					exits("fork attach");
+				memmove((void*)va, tmp, len);
+				free(tmp);
+			}
+		}
+		if(forkready[1] >= 0){
+			write(forkready[1], "x", 1);
+			close(forkready[1]);
+			forkready[1] = -1;
+		}
+		return 1;
+	}
 	ur->ax = dosyscall(ur);
 	ur->pc += 2;
 	if(tlsfsokay)
 		ur->fs = tlsselector;
 	return 1;
 }
-
-static uchar trapinsn[2] = {0x0f, 0x0b};
 
 static void
 runguest(void)
@@ -1718,7 +1916,7 @@ mfd = open("/dev/mark", OWRITE);
 		close(mfd);
 	}
 	if(mfd >= 0)
-		attachnotestack(0x5f000000);
+		attachnotestack();
 	else
 		fprint(2, "linuxrun: foreign mark failed: %r\n");
 

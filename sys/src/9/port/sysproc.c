@@ -95,11 +95,17 @@ sysrfork(ulong *arg)
 	memmove(p->note, up->note, sizeof(p->note));
 	p->privatemem = up->privatemem;
 	p->noswap = up->noswap;
-	p->nnote = up->nnote;
+	/* Do not replay the parent's queued notes into the child: they
+	 * are artifacts of foreign-syscall note delivery (the parent
+	 * forks from inside its handler), and a delivery in the child
+	 * before it re-registers would set its notified state and kill
+	 * it on the next trap note. */
+	p->nnote = 0;
 	p->notified = 0;
 	p->lastnote = up->lastnote;
 	/* the child needs its own LDT page: the foreign TLS entries are
 	 * per-process state, not memory to share (devldt) */
+	p->ldtbase = up->ldtbase;
 	if(p->ldtbase != 0){
 		ulong ldt;
 

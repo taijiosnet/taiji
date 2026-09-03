@@ -10,7 +10,9 @@ python3 - "$tmp" <<'PY'
 import os, re, subprocess, sys
 tmp = sys.argv[1]
 ROOTS = ["xvfb", "xterm", "x11-apps", "xfwm4", "xfce4-panel", "xfdesktop",
-         "fonts-dejavu-core"]
+         "fonts-dejavu-core",
+         # Xorg compiles its keymap by running xkbcomp through /bin/sh
+         "dash"]
 pkg, provides = {}, {}
 for b in open(tmp + "/Packages").read().split("\n\n"):
     f, key = {}, None
@@ -50,6 +52,12 @@ for n in sorted(seen):
     data = [c for c in os.listdir(x) if c.startswith("data.tar")][0]
     subprocess.run(["tar", "xf", data, "-C", tmp + "/root"], cwd=x, check=True)
 subprocess.run(["cp", "-R", tmp + "/root/.", "debian/rootfs/"], check=True)
+# dash ships only /bin/dash; the /bin/sh link is made by the package
+# scripts on real Debian, so provide it here
+os.makedirs("debian/rootfs/bin", exist_ok=True)
+if os.path.lexists("debian/rootfs/bin/sh"):
+    os.remove("debian/rootfs/bin/sh")
+os.symlink("dash", "debian/rootfs/bin/sh")
 print("staged", len(seen), "packages into debian/rootfs")
 PY
 rm -rf "$tmp"

@@ -849,13 +849,22 @@ notify(Ureg* ureg)
 		return 0;
 	}
 
+
+
 	if(!up->notify){
 		qunlock(&up->debug);
 		pexit(n->msg, n->flag!=NDebug);
 	}
-	if(up->notestack)
+	if(up->notestack){
 		sp = up->notestack;
-	else{
+		/* a note taken while we are already running inside the
+		 * handler must not overwrite the live outer frame: nest
+		 * below the current sp (note stacks are small segments
+		 * far from any other mapping, so the window test is
+		 * safe without tracking the segment size) */
+		if(ureg->usp >= up->notestack && ureg->usp < up->notestack + 0x100000)
+			sp = ureg->usp - 256;
+	}else{
 		sp = ureg->usp;
 		sp -= 256;	/* debugging: preserve context causing problem */
 	}
