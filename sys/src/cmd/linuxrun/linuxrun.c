@@ -181,7 +181,9 @@ int nguestsegs;
 /* AF_UNIX sockets bridged over plan9 pipes: the listener publishes
  * "spid fd" at the socket path; connect opens /proc/spid/fd and hands
  * over its own two data pipes; accept reads the request. */
-int listenerfd = -1;	/* read end of the active listener pipe */
+int listenerfd = -1;	/* unused: accept polls a queue file now */
+char boundpath[256];	/* socket path of the active listener */
+int listenfd = -1;	/* guest fd of the listener socket */
 int nepollsets;
 
 char *genv[] = {
@@ -202,6 +204,7 @@ struct Epev {
 	ulong data;
 };
 struct Epev eptab[Maxep];
+int epinit;
 ulong phdrva;
 ulong randva;
 ulong sysinfova;
@@ -785,8 +788,9 @@ postsrvfd(char *name, int fd)
 
 	snprint(buf, sizeof buf, "%d", fd);
 	sfd = create(name, OWRITE, 0666);
-	if(sfd < 0)
-		return -1;
+	if(sfd < 0){
+			return -1;
+	}
 	if(write(sfd, buf, strlen(buf)) < 0){
 		close(sfd);
 		return -1;
@@ -798,39 +802,26 @@ postsrvfd(char *name, int fd)
 static long
 sysbindlisten(ulong path)
 {
-	char buf[512], req[512];
-	int p[2], fd;
+	char req[512];
+	int fd;
 
 	if(path == 0)
 		return -Efault;
 	if(((uchar*)path)[0] == 0)	/* abstract sockets have no file name */
 		return -Eacces;
-	if(pipe(p) < 0)
-		return -Enomem;
-	snprint(req, sizeof req, "/srv/x.l.%d", getpid());
-	if(postsrvfd(req, p[1]) < 0){
-		close(p[0]);
-		close(p[1]);
-		return -Enomem;
-	}
+	strncpy(boundpath, (char*)path, sizeof boundpath - 1);
+	boundpath[sizeof boundpath - 1] = 0;
+	/* clients queue connection requests at <path>.q; accept drains
+	 * that file, so a stale one from a previous server must go */
+	snprint(req, sizeof req, "%s.q", boundpath);
+	remove(req);
 	snprint(req, sizeof req, "%s.req", (char*)path);
 	fd = create(req, OWRITE|OTRUNC, 0666);
 	if(fd < 0)
 		fd = create(req, OWRITE, 0666);
-	if(fd < 0){
-		close(p[0]);
-		close(p[1]);
+	if(fd < 0)
 		return -Enoent;
-	}
-	snprint(buf, sizeof buf, "x.l.%d\n", getpid());
-	if(write(fd, buf, strlen(buf)) < 0){
-		close(fd);
-		close(p[0]);
-		close(p[1]);
-		return -Enomem;
-	}
-	close(fd);
-	listenerfd = p[0];
+	close(fd);	/* the .req file existing is the bind mark */
 	return 0;
 }
 
@@ -842,7 +833,7 @@ static long
 sysconnect(ulong path)
 {
 	char buf[512], line[128];
-	int sfd, c2s[2], s2c[2], n, spid, lfd;
+	int sfd, c2s[2], s2c[2];
 	char target[128];
 
 	if(path == 0)
@@ -851,16 +842,10 @@ sysconnect(ulong path)
 					 * ECONNREFUSED makes Xlib fall
 					 * back to the pathname socket */
 		return -111;
+	/* the .req file existing is the server's bind mark */
 	snprint(buf, sizeof buf, "%s.req", (char*)path);
-	sfd = open(buf, OREAD);
-	if(sfd < 0)
+	if(access(buf, AEXIST) < 0)
 		return -Enoent;
-	n = readn(sfd, line, sizeof line-1);
-	close(sfd);
-	if(n <= 0)
-		return -Enoent;
-	line[n] = 0;
-	line[n-1] = 0;	/* strip the newline: the srv name */
 	if(pipe(c2s) < 0 || pipe(s2c) < 0)
 		return -Enomem;
 	/* server reads what we write: publish c2s[0]; it writes back on
@@ -871,15 +856,9 @@ sysconnect(ulong path)
 	snprint(target, sizeof target, "/srv/x.c.%d.b", getpid());
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
-	snprint(target, sizeof target, "/srv/%s", line);
-	sfd = open(target, OWRITE);
-	if(sfd < 0)
-		return -Enoent;
-	snprint(line, sizeof line, "x.c.%d.a x.c.%d.b\n", getpid(), getpid());
-	if(write(sfd, line, strlen(line)) < 0)
-		return -Enomem;
-	close(sfd);
-	return (c2s[0]<<16) | s2c[1];
+	/* the two /srv posts ARE the queue: the (nonblocking)
+	 * accept scans /srv for pending x.a.<pid> entries */
+	return (s2c[0]<<16) | c2s[1];
 }
 
 /* minimal "%%d %%d[ %%d]" line parser for the socket bridge */
@@ -931,28 +910,56 @@ sscanf2(char *s, char *a, int na, char *b, int nb)
 }
 
 static long
+static int servedpids[32];
+static int nserved;
+
 sysaccept(void)
 {
-	char line[128], target[128], tbuf[64];
-	int n, rf, wf;
+	char buf[4096], target[64];
+	int fd, n, i, cpid, rf, wf;
+	char *p;
 
-	if(listenerfd < 0)
+	if(boundpath[0] == 0)
 		return -Ebadf;
-	n = readn(listenerfd, line, sizeof line-1);
+	/* scan /srv for the client's posted pipe ends: the entries are
+	 * kernel-global and listing never blocks, so this accept is
+	 * naturally nonblocking */
+	fd = open("/srv", OREAD);
+	if(fd < 0)
+		return -11;	/* -EAGAIN */
+	n = readn(fd, buf, sizeof buf-1);
+	close(fd);
 	if(n <= 0)
-		return -Ebadf;
-	line[n] = 0;
-	/* "nameA nameB": nameA = the client's write end (we read),
-	 * nameB = its read end (we write) */
-	if(sscanf2(line, target, sizeof target, tbuf, sizeof tbuf) != 2)
-		return -Ebadf;
-	snprint(line, sizeof line, "/srv/%s", target);
-	rf = open(line, OREAD);
-	snprint(line, sizeof line, "/srv/%s", tbuf);
-	wf = open(line, OWRITE);
-	if(rf < 0 || wf < 0)
-		return -Ebadf;
-	return (rf<<16) | wf;
+		return -11;
+	buf[n] = 0;
+	/* the marshaled directory stream carries names as plain
+	 * strings: look for x.a.<pid> with its x.b twin present */
+	for(p = buf; (p = strstr(p, "x.a.")) != nil; p += 4){
+		char *q;
+
+		cpid = strtol(p+4, &q, 10);
+		if(cpid <= 0)
+			continue;
+		for(i = 0; i < nserved; i++)
+			if(servedpids[i] == cpid)
+				goto next;
+		snprint(target, sizeof target, "x.b.%d", cpid);
+		if(strstr(buf, target) == nil)
+			continue;
+		snprint(target, sizeof target, "/srv/x.c.%d.a", cpid);
+		rf = open(target, OREAD);
+		if(rf < 0)
+				snprint(target, sizeof target, "/srv/x.c.%d.b", cpid);
+		wf = open(target, OWRITE);
+		if(wf < 0)
+				if(rf < 0 || wf < 0)
+			continue;
+		if(nserved < 32)
+			servedpids[nserved++] = cpid;
+			return (rf<<16) | wf;
+	next: ;
+	}
+	return -11;	/* -EAGAIN */
 }
 
 static long
@@ -974,6 +981,7 @@ dosocketcall(ulong subop, ulong argsp)
 		r = (a[0] == 1) ? 0 : -Eacces;
 		break;
 	case 2:		/* bind(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
+		listenfd = a[0];
 		r = sysbindlisten(a[1] + 2);
 		break;
 	case 3:		/* connect(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
@@ -1469,7 +1477,12 @@ dosyscall(Ureg *ur)
 		{
 			int i, slot;
 
-			if(a4 == 2){	/* DEL */
+			if(!epinit){
+				epinit = 1;
+				for(i = 0; i < Maxep; i++)
+					eptab[i].epfd = -1;
+			}
+			if(a2 == 2){	/* EPOLL_CTL_DEL: a2 is the op code */
 				for(i = 0; i < Maxep; i++)
 					if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a3)
 						eptab[i].epfd = -1;
@@ -1478,7 +1491,7 @@ dosyscall(Ureg *ur)
 			}
 			slot = -1;
 			for(i = 0; i < Maxep; i++){
-				if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a2){
+				if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a3){
 					slot = i;
 					break;
 				}
@@ -1490,8 +1503,7 @@ dosyscall(Ureg *ur)
 				break;
 			}
 			eptab[slot].epfd = (int)a1;
-			eptab[slot].fd = (int)a3;	/* a2 is the op code */
-			eptab[slot].events = a4;
+			eptab[slot].fd = (int)a3;
 			if(a4 != 0){
 				/* the event struct: events(4) + data(8) */
 				eptab[slot].events = *(ulong*)a4;
@@ -1503,6 +1515,7 @@ dosyscall(Ureg *ur)
 	case 256:	/* epoll_wait_old */
 		{
 			ulong *ev;
+			char tbuf[4096];
 			int i, maxev, n;
 
 			ev = (ulong*)a2;
@@ -1511,6 +1524,21 @@ dosyscall(Ureg *ur)
 			for(i = 0; i < Maxep && n < maxev; i++){
 				if(eptab[i].epfd != (int)a1)
 					continue;
+				/* the listener is readable only when a
+				 * connection is queued; reporting it
+				 * otherwise makes the server spin in
+				 * failing accepts */
+				if(eptab[i].fd == listenfd && listenfd >= 0){
+					int qfd, qn;
+
+					qfd = open("/srv", OREAD);
+					if(qfd < 0)
+						continue;
+					qn = readn(qfd, tbuf, sizeof tbuf-1);
+					close(qfd);
+					if(qn <= 0 || strstr(tbuf, "x.a.") == nil)
+						continue;
+				}
 				if(ev != nil){
 					ev[n*3] = eptab[i].events & 0xffffffff;
 					ev[n*3+1] = (ulong)eptab[i].data;
@@ -1661,6 +1689,32 @@ dosyscall(Ureg *ur)
 		break;
 	case 102:	/* socketcall */
 		r = dosocketcall(a1, a2);
+		break;
+	case 359:	/* socket (direct): AF_UNIX only */
+		r = (a1 == 1) ? 0 : -Eacces;
+		break;
+	case 361:	/* bind (direct) */
+		listenfd = a1;
+		r = sysbindlisten(a2 + 2);
+		break;
+	case 362:	/* connect (direct) */
+		r = sysconnect(a2 + 2);
+		break;
+	case 363:	/* listen (direct) */
+		r = 0;
+		break;
+	case 364:	/* accept4 (direct): glibc's accept() on i386 */
+		r = sysaccept();
+		break;
+	case 369:	/* sendto (direct) */
+		r = write(sockwritefd((int)a1), (void*)a2, a3);
+		if(r < 0)
+			r = -Ebadf;
+		break;
+	case 371:	/* recvfrom (direct) */
+		r = read(sockreadfd((int)a1), (void*)a2, a3);
+		if(r < 0)
+			r = -Ebadf;
 		break;
 	case 220:	/* getdents64 */
 		r = sysgetdents64((int)a1, a2, a3);
