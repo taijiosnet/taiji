@@ -182,6 +182,8 @@ int nguestsegs;
  * "spid fd" at the socket path; connect opens /proc/spid/fd and hands
  * over its own two data pipes; accept reads the request. */
 int listenerfd = -1;	/* read end of the active listener pipe */
+int nepollsets;
+
 char *genv[] = {
 	"LD_BIND_NOW=1",
 	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
@@ -1456,16 +1458,9 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
-	case 254:	/* epoll_create: hand back a placeholder fd */
-		{
-			int efd;
-
-			efd = open("#c/pid", OREAD);
-			if(efd < 0)
-				r = -Enomem;
-			else
-				r = efd;
-		}
+	case 254:	/* epoll_create: a synthetic descriptor; real fd
+			 * numbers would collide with the guest's own */
+		r = 0x45000000 + (nepollsets++ & 0xffff);
 		break;
 	case 255:	/* epoll_ctl_old */
 	case 324:	/* kept: some builds route ctl here */
