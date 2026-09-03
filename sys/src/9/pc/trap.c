@@ -339,6 +339,10 @@ trap(Ureg* ureg)
 		&& *(uchar*)(ureg->pc+1) == 0x80){
 			if(!postnote(up, 0, "linux sys", NUser))
 				pexit("suicide", 0);
+			/* deliver now: returning without delivery would
+			 * re-execute the int 0x80 and pile more notes */
+			if(!notify(ureg))
+				pexit("suicide", 0);
 			return;
 		}
 	}
@@ -380,6 +384,7 @@ trap(Ureg* ureg)
 		&& *(uchar*)ureg->pc == 0xcd
 		&& *(uchar*)(ureg->pc+1) == 0x80){
 			postnote(up, 0, "linux sys", NUser);
+			notify(ureg);
 			return;
 		}
 		spllo();

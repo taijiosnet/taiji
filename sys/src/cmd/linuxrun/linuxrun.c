@@ -186,6 +186,7 @@ char *genv[] = {
 	"LD_BIND_NOW=1",
 	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
 	"HOME=/root",
+	"DISPLAY=:0",
 	nil,};
 
 /* epoll: a table of registered fds per epoll fd; wait reports every
@@ -769,6 +770,29 @@ sockwritefd(int fd)
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
+
+/* Publish an fd as /srv/<name>: writing the decimal fd to a fresh
+ * /srv file makes the kernel share that channel with any process
+ * that opens the name (devsrv).  This is how the AF_UNIX bridge
+ * hands pipe ends between linuxrun processes without /proc. */
+static int
+postsrvfd(char *name, int fd)
+{
+	char buf[16];
+	int sfd;
+
+	snprint(buf, sizeof buf, "%d", fd);
+	sfd = create(name, OWRITE, 0666);
+	if(sfd < 0)
+		return -1;
+	if(write(sfd, buf, strlen(buf)) < 0){
+		close(sfd);
+		return -1;
+	}
+	close(sfd);
+	return 0;
+}
+
 static long
 sysbindlisten(ulong path)
 {
@@ -781,6 +805,12 @@ sysbindlisten(ulong path)
 		return -Eacces;
 	if(pipe(p) < 0)
 		return -Enomem;
+	snprint(req, sizeof req, "/srv/x.l.%d", getpid());
+	if(postsrvfd(req, p[1]) < 0){
+		close(p[0]);
+		close(p[1]);
+		return -Enomem;
+	}
 	snprint(req, sizeof req, "%s.req", (char*)path);
 	fd = create(req, OWRITE|OTRUNC, 0666);
 	if(fd < 0)
@@ -790,7 +820,7 @@ sysbindlisten(ulong path)
 		close(p[1]);
 		return -Enoent;
 	}
-	snprint(buf, sizeof buf, "%d %d\n", getpid(), p[1]);
+	snprint(buf, sizeof buf, "x.l.%d\n", getpid());
 	if(write(fd, buf, strlen(buf)) < 0){
 		close(fd);
 		close(p[0]);
@@ -803,6 +833,7 @@ sysbindlisten(ulong path)
 }
 
 static int sscanf3(char*, int*, int*, int*);
+static int sscanf2(char*, char*, int, char*, int);
 static int traphandler(void*, char*);
 
 static long
@@ -814,6 +845,10 @@ sysconnect(ulong path)
 
 	if(path == 0)
 		return -Efault;
+	if(((uchar*)path)[0] == 0)	/* abstract sockets: no pathname;
+					 * ECONNREFUSED makes Xlib fall
+					 * back to the pathname socket */
+		return -111;
 	snprint(buf, sizeof buf, "%s.req", (char*)path);
 	sfd = open(buf, OREAD);
 	if(sfd < 0)
@@ -823,20 +858,25 @@ sysconnect(ulong path)
 	if(n <= 0)
 		return -Enoent;
 	line[n] = 0;
-	if(sscanf3(line, &spid, &lfd, &lfd) < 2)
-		return -Enoent;
+	line[n-1] = 0;	/* strip the newline: the srv name */
 	if(pipe(c2s) < 0 || pipe(s2c) < 0)
 		return -Enomem;
-	snprint(target, sizeof target, "/proc/%d/fd/%d", spid, lfd);
+	/* server reads what we write: publish c2s[0]; it writes back on
+	 * s2c[1].  We keep c2s[1] (write) and s2c[0] (read). */
+	snprint(target, sizeof target, "/srv/x.c.%d.a", getpid());
+	if(postsrvfd(target, c2s[0]) < 0)
+		return -Enomem;
+	snprint(target, sizeof target, "/srv/x.c.%d.b", getpid());
+	if(postsrvfd(target, s2c[1]) < 0)
+		return -Enomem;
+	snprint(target, sizeof target, "/srv/%s", line);
 	sfd = open(target, OWRITE);
 	if(sfd < 0)
 		return -Enoent;
-	snprint(line, sizeof line, "%d %d %d\n", getpid(), c2s[1], s2c[0]);
+	snprint(line, sizeof line, "x.c.%d.a x.c.%d.b\n", getpid(), getpid());
 	if(write(sfd, line, strlen(line)) < 0)
 		return -Enomem;
 	close(sfd);
-	close(c2s[1]);
-	close(s2c[0]);
 	return (c2s[0]<<16) | s2c[1];
 }
 
@@ -868,11 +908,31 @@ sscanf3(char *s, int *a, int *b, int *c)
 	return n;
 }
 
+/* split "nameA nameB\n" */
+static int
+sscanf2(char *s, char *a, int na, char *b, int nb)
+{
+	int i;
+
+	while(*s == ' ')
+		s++;
+	for(i = 0; s[i] && s[i] != ' ' && s[i] != '\n' && i < na-1; i++)
+		a[i] = s[i];
+	a[i] = 0;
+	s += i;
+	while(*s == ' ')
+		s++;
+	for(i = 0; s[i] && s[i] != ' ' && s[i] != '\n' && i < nb-1; i++)
+		b[i] = s[i];
+	b[i] = 0;
+	return (a[0] && b[0]) ? 2 : 0;
+}
+
 static long
 sysaccept(void)
 {
-	char line[128], target[128];
-	int n, cpid, wfd, rfd, rf, wf;
+	char line[128], target[128], tbuf[64];
+	int n, rf, wf;
 
 	if(listenerfd < 0)
 		return -Ebadf;
@@ -880,12 +940,14 @@ sysaccept(void)
 	if(n <= 0)
 		return -Ebadf;
 	line[n] = 0;
-	if(sscanf3(line, &cpid, &wfd, &rfd) != 3)
+	/* "nameA nameB": nameA = the client's write end (we read),
+	 * nameB = its read end (we write) */
+	if(sscanf2(line, target, sizeof target, tbuf, sizeof tbuf) != 2)
 		return -Ebadf;
-	snprint(target, sizeof target, "/proc/%d/fd/%d", cpid, rfd);
-	rf = open(target, OREAD);
-	snprint(target, sizeof target, "/proc/%d/fd/%d", cpid, wfd);
-	wf = open(target, OWRITE);
+	snprint(line, sizeof line, "/srv/%s", target);
+	rf = open(line, OREAD);
+	snprint(line, sizeof line, "/srv/%s", tbuf);
+	wf = open(line, OWRITE);
 	if(rf < 0 || wf < 0)
 		return -Ebadf;
 	return (rf<<16) | wf;
@@ -1394,13 +1456,27 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
-	case 324:	/* epoll_ctl: record (or drop) the registration */
+	case 254:	/* epoll_create: hand back a placeholder fd */
+		{
+			int efd;
+
+			efd = open("#c/pid", OREAD);
+			if(efd < 0)
+				r = -Enomem;
+			else
+				r = efd;
+		}
+		break;
+	case 255:	/* epoll_ctl_old */
+	case 324:	/* kept: some builds route ctl here */
+	case 266:	/* observed epoll_ctl variant (a1=epfd a2=op a3=fd) */
+	case 406:	/* observed epoll_ctl variant */
 		{
 			int i, slot;
 
 			if(a4 == 2){	/* DEL */
 				for(i = 0; i < Maxep; i++)
-					if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a2)
+					if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a3)
 						eptab[i].epfd = -1;
 				r = 0;
 				break;
@@ -1419,7 +1495,7 @@ dosyscall(Ureg *ur)
 				break;
 			}
 			eptab[slot].epfd = (int)a1;
-			eptab[slot].fd = (int)a2;
+			eptab[slot].fd = (int)a3;	/* a2 is the op code */
 			eptab[slot].events = a4;
 			if(a4 != 0){
 				/* the event struct: events(4) + data(8) */
@@ -1429,7 +1505,7 @@ dosyscall(Ureg *ur)
 			r = 0;
 		}
 		break;
-	case 256:	/* epoll_wait: all registered ready */
+	case 256:	/* epoll_wait_old */
 		{
 			ulong *ev;
 			int i, maxev, n;
@@ -1465,19 +1541,24 @@ dosyscall(Ureg *ur)
 		}
 		break;
 	case 2:		/* fork */
+	case 190:	/* vfork: a real copy is a valid implementation */
 	case 120:	/* clone: threads share the guest "shared" segments */
 		{
 			int pid, mfd;
 			void (*starter)(void);
 
-			if(pipe(forkready) < 0)
+			if(pipe(forkready) < 0){
+				fprint(2, "linuxrun: fork pipe: %r\n");
 				forkready[0] = forkready[1] = -1;
+			}
 			/* RFFDG copies the fd table (Linux fork semantics):
 			 * RFCFDG would empty it, leaving the child without
 			 * fd 2 and without the forkready pipe */
 			pid = rfork(RFPROC|RFFDG|RFNOTEG);
-			if(pid < 0)
+			if(pid < 0){
+				fprint(2, "linuxrun: rfork: %r\n");
 				r = -Enomem;
+			}
 			else if(pid == 0){
 				if(ldtfd >= 0){
 					close(ldtfd);
