@@ -508,6 +508,22 @@ sysuname(ulong addr)
 	return 0;
 }
 
+/* substring search over a length-delimited, not NUL-safe, buffer */
+static char*
+memfind(char *b, int n, char *sub)
+{
+	int i, sl;
+
+	sl = strlen(sub);
+	for(i = 0; i + sl <= n; i++)
+		if(memcmp(b+i, sub, sl) == 0)
+			return b+i;
+	return nil;
+}
+
+static int sockreadfd(int);
+static int sockwritefd(int);
+
 static long
 syswritev(ulong fd, ulong iov, ulong cnt)
 {
@@ -516,6 +532,7 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 	ulong i;
 
 	v = (struct Liovec*)iov;
+	fd = sockwritefd((int)fd);
 	total = 0;
 	for(i = 0; i < cnt; i++)
 		total += v[i].len;
@@ -537,6 +554,7 @@ sysreadv(ulong fd, ulong iov, ulong cnt)
 	ulong i;
 
 	v = (struct Liovec*)iov;
+	fd = sockreadfd((int)fd);
 	total = 0;
 	for(i = 0; i < cnt; i++){
 		if(v[i].len == 0)
@@ -973,10 +991,10 @@ sscanf2(char *s, char *a, int na, char *b, int nb)
 	return (a[0] && b[0]) ? 2 : 0;
 }
 
-static long
 static int servedpids[32];
 static int nserved;
 
+static long
 sysaccept(void)
 {
 	char buf[4096], target[64];
@@ -998,7 +1016,7 @@ sysaccept(void)
 	buf[n] = 0;
 	/* the marshaled directory stream carries names as plain
 	 * strings: look for x.c.<pid>.a with its x.c.<pid>.b twin */
-	for(p = buf; (p = strstr(p, "x.c.")) != nil; p += 4){
+	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
 		char *q;
 
 		cpid = strtol(p+4, &q, 10);
@@ -1008,7 +1026,7 @@ sysaccept(void)
 			if(servedpids[i] == cpid)
 				goto next;
 		snprint(target, sizeof target, "x.c.%d.b", cpid);
-		if(strstr(buf, target) == nil)
+		if(memfind(buf, n, target) == nil)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.a", cpid);
 		rf = open(target, OREAD);
@@ -1576,7 +1594,6 @@ dosyscall(Ureg *ur)
 	case 329:	/* epoll_create1: a pipe stands in for the object */
 		{
 			int p[2];
-
 			if(pipe(p) < 0)
 				r = -Enomem;
 			else{
@@ -1655,7 +1672,11 @@ dosyscall(Ureg *ur)
 						continue;
 					qn = readn(qfd, tbuf, sizeof tbuf-1);
 					close(qfd);
-					if(qn <= 0 || strstr(tbuf, "x.c.") == nil)
+					/* the marshaled dir stream carries NUL
+					 * bytes in qid/type fields: strstr
+					 * stops at the first one, so scan by
+					 * length instead */
+					if(qn <= 0 || memfind(tbuf, qn, "x.c.") == nil)
 						continue;
 				}
 				if(ev != nil){
@@ -1666,13 +1687,19 @@ dosyscall(Ureg *ur)
 				n++;
 			}
 			if(n == 0){
-				/* timeout 0 still must yield: the server's
-				 * scheduler pokes epoll_wait(0) in a
-				 * tight loop and starves everything */
-				if(a4 > 50)
-					sleep(50);
-				else
-					sleep(a4 > 0 ? a4 : 1);
+				/* yield only after a burst of empty polls:
+				 * the server's scheduler pokes
+				 * epoll_wait(0) in a tight loop and a
+				 * yield on every poll distorts its timing */
+				static int nempty;
+
+				if(++nempty >= 64){
+					nempty = 0;
+					if(a4 > 50)
+						sleep(50);
+					else
+						sleep(a4 > 0 ? a4 : 1);
+				}
 			}
 			r = n;
 		}
