@@ -794,15 +794,25 @@ socknewslot(ulong packed)
 		fd = open("#c/pid", OREAD);
 		if(fd < 0)
 			return -1;
-		/* park it at a number no real file will reach: fd 0
-		 * would hijack every stdin read through the map */
-		sockmap[i][0] = dup(fd, 200 + i);
-		close(fd);
-		if(sockmap[i][0] < 0)
+		/* never let the placeholder land on stdio: fd 0 would
+		 * hijack every stdin read through the map */
+		while(fd < 3){
+			int fd2;
+
+			fd2 = open("#c/pid", OREAD);
+			if(fd2 < 0)
+				break;
+			close(fd);
+			fd = fd2;
+		}
+		if(fd < 3){
+			close(fd);
 			return -1;
+		}
+		sockmap[i][0] = fd;
 		sockmap[i][1] = 1;
 		sockmap[i][2] = packed;
-		return sockmap[i][0];
+		return fd;
 	}
 	return -1;
 }
@@ -1655,8 +1665,15 @@ dosyscall(Ureg *ur)
 				}
 				n++;
 			}
-			if(n == 0 && a4 > 0)
-				sleep(a4 > 50 ? 50 : a4);
+			if(n == 0){
+				/* timeout 0 still must yield: the server's
+				 * scheduler pokes epoll_wait(0) in a
+				 * tight loop and starves everything */
+				if(a4 > 50)
+					sleep(50);
+				else
+					sleep(a4 > 0 ? a4 : 1);
+			}
 			r = n;
 		}
 		break;
