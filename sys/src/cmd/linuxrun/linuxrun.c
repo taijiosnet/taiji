@@ -788,18 +788,22 @@ socknewslot(ulong packed)
 {
 	int i, fd;
 
-	fd = open("#c/pid", OREAD);
-	if(fd < 0)
-		return -1;
 	for(i = 0; i < NSOCK; i++){
-		if(!sockmap[i][1]){
-			sockmap[i][0] = fd;
-			sockmap[i][1] = 1;
-			sockmap[i][2] = packed;
-			return fd;
-		}
+		if(sockmap[i][1])
+			continue;
+		fd = open("#c/pid", OREAD);
+		if(fd < 0)
+			return -1;
+		/* park it at a number no real file will reach: fd 0
+		 * would hijack every stdin read through the map */
+		sockmap[i][0] = dup(fd, 200 + i);
+		close(fd);
+		if(sockmap[i][0] < 0)
+			return -1;
+		sockmap[i][1] = 1;
+		sockmap[i][2] = packed;
+		return sockmap[i][0];
 	}
-	close(fd);
 	return -1;
 }
 
@@ -907,7 +911,7 @@ sysconnect(ulong path)
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
 	/* the two /srv posts ARE the queue: the (nonblocking)
-	 * accept scans /srv for pending x.a.<pid> entries */
+	 * accept scans /srv for pending x.c.<pid>.a entries */
 	return (s2c[0]<<16) | c2s[1];
 }
 
@@ -983,17 +987,17 @@ sysaccept(void)
 		return -11;
 	buf[n] = 0;
 	/* the marshaled directory stream carries names as plain
-	 * strings: look for x.a.<pid> with its x.b twin present */
-	for(p = buf; (p = strstr(p, "x.a.")) != nil; p += 4){
+	 * strings: look for x.c.<pid>.a with its x.c.<pid>.b twin */
+	for(p = buf; (p = strstr(p, "x.c.")) != nil; p += 4){
 		char *q;
 
 		cpid = strtol(p+4, &q, 10);
-		if(cpid <= 0)
-			continue;
+		if(cpid <= 0 || q[0] != '.' || q[1] != 'a')
+			continue;	/* only the .a twin queues */
 		for(i = 0; i < nserved; i++)
 			if(servedpids[i] == cpid)
 				goto next;
-		snprint(target, sizeof target, "x.b.%d", cpid);
+		snprint(target, sizeof target, "x.c.%d.b", cpid);
 		if(strstr(buf, target) == nil)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.a", cpid);
@@ -1006,7 +1010,7 @@ sysaccept(void)
 			continue;
 		if(nserved < 32)
 			servedpids[nserved++] = cpid;
-			return (rf<<16) | wf;
+		return (rf<<16) | wf;
 	next: ;
 	}
 	return -11;	/* -EAGAIN */
@@ -1641,7 +1645,7 @@ dosyscall(Ureg *ur)
 						continue;
 					qn = readn(qfd, tbuf, sizeof tbuf-1);
 					close(qfd);
-					if(qn <= 0 || strstr(tbuf, "x.a.") == nil)
+					if(qn <= 0 || strstr(tbuf, "x.c.") == nil)
 						continue;
 				}
 				if(ev != nil){
