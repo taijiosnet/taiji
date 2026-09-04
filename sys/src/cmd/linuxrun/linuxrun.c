@@ -760,18 +760,68 @@ initsysinfo(void)
 
 
 /* ---- AF_UNIX over plan9 pipes ---- */
-/* Bridge socket fds pack the pipe ends as (read<<16)|write; plain
- * fds pass through unchanged.  Plan 9 fd numbers stay far below
- * 0x10000 in practice, so the packing is unambiguous. */
+/* Guest socket descriptors are synthetic ids mapped here to the
+ * bridge's packed pipe pair (read<<16)|write.  The guest reads and
+ * writes its own descriptor number; handing it the packed value
+ * directly never works because libc passes the socket() return to
+ * poll() and recv() unchanged. */
+#define NSOCK 16
+int sockmap[NSOCK][3];	/* [i]: guest fd, active, packed */
+
+static int
+sockslot(int fd)
+{
+	int i;
+
+	for(i = 0; i < NSOCK; i++)
+		if(sockmap[i][1] && sockmap[i][0] == fd)
+			return i;
+	return -1;
+}
+
+
+/* Allocate a socket-map slot whose guest-visible descriptor is a real
+ * plan9 fd number (a #c/pid placeholder): synthetic high ids leak into
+ * guest pointer slots and crash later writes through them. */
+static int
+socknewslot(ulong packed)
+{
+	int i, fd;
+
+	fd = open("#c/pid", OREAD);
+	if(fd < 0)
+		return -1;
+	for(i = 0; i < NSOCK; i++){
+		if(!sockmap[i][1]){
+			sockmap[i][0] = fd;
+			sockmap[i][1] = 1;
+			sockmap[i][2] = packed;
+			return fd;
+		}
+	}
+	close(fd);
+	return -1;
+}
+
 static int
 sockreadfd(int fd)
 {
+	int i;
+
+	i = sockslot(fd);
+	if(i >= 0)
+		return sockmap[i][2] >> 16;
 	return (fd >= 0x10000) ? (fd >> 16) : fd;
 }
 
 static int
 sockwritefd(int fd)
 {
+	int i;
+
+	i = sockslot(fd);
+	if(i >= 0)
+		return sockmap[i][2] & 0xffff;
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
@@ -978,7 +1028,13 @@ dosocketcall(ulong subop, ulong argsp)
 	r = -Enosys;
 	switch(subop){
 	case 1:		/* socket(a0=domain,a1=type,a2=proto): AF_UNIX only */
-		r = (a[0] == 1) ? 0 : -Eacces;
+		if(a[0] != 1){
+			r = -Eacces;
+			break;
+		}
+		r = socknewslot(0);
+		if(r < 0)
+			r = -Enomem;
 		break;
 	case 2:		/* bind(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
 		listenfd = a[0];
@@ -986,20 +1042,48 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 3:		/* connect(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
 		r = sysconnect(a[1] + 2);
+		if(r >= 0){
+			int i;
+
+			i = sockslot(a[0]);
+			if(i >= 0)
+				sockmap[i][2] = r;
+		}
 		break;
 	case 4:		/* listen */
 	case 13:	/* shutdown */
 	case 14:	/* setsockopt */
-	case 15:	/* getsockopt */
+	case 15:	/* getsockopt: report success with a zeroed optval -
+			 * Xlib polls POLLOUT then reads SO_ERROR to learn
+			 * whether a nonblocking connect finished */
+		if(a[3] > 0x10000)
+			*(int*)a[3] = 0;
+		if(a[4] > 0x10000)
+			*(int*)a[4] = 4;
 		r = 0;
 		break;
 	case 5:		/* accept */
 		r = sysaccept();
+		if(r >= 0x10000){
+			int ns;
+
+			ns = socknewslot(r);
+			if(ns < 0)
+				r = -Enomem;
+			else
+				r = ns;
+		}
 		break;
-	case 8:		/* socketpair: two pipes is close enough */
+	case 8:		/* socketpair: two pipes is close enough; never
+		 * store through a pointer that is actually one of our
+		 * synthetic descriptors come back in a stale arg slot */
 		{
 			int p[2];
 
+			if(a[3] >= 0x51000000UL && a[3] < 0x51010000UL){
+				r = 0;
+				break;
+			}
 			if(pipe(p) < 0)
 				r = -Enomem;
 			else{
@@ -1021,21 +1105,34 @@ dosocketcall(ulong subop, ulong argsp)
 		if(r < 0)
 			r = -Ebadf;
 		break;
-	case 16:	/* sendmsg: first iovec only */
+	case 16:	/* sendmsg: first iovec only; the arg is a msghdr,
+			 * whose msg_iov (offset 8) points at the vectors */
 		{
 			struct Liovec *v;
+			ulong iov;
 
-			v = (struct Liovec*)a[1];
+			iov = ((ulong*)a[1])[2];
+			if(iov < 0x10000){
+				r = -Efault;
+				break;
+			}
+			v = (struct Liovec*)iov;
 			r = write(sockwritefd((int)a[0]), v[0].base, v[0].len);
 			if(r < 0)
 				r = -Ebadf;
 		}
 		break;
-	case 17:	/* recvmsg */
+	case 17:	/* recvmsg: msg_iov at msghdr offset 8 */
 		{
 			struct Liovec *v;
+			ulong iov;
 
-			v = (struct Liovec*)a[1];
+			iov = ((ulong*)a[1])[2];
+			if(iov < 0x10000){
+				r = -Efault;
+				break;
+			}
+			v = (struct Liovec*)iov;
 			r = read(sockreadfd((int)a[0]), v[0].base, v[0].len);
 			if(r < 0)
 				r = -Ebadf;
@@ -1265,12 +1362,20 @@ dosyscall(Ureg *ur)
 		}
 		break;
 	case 6:		/* close */
-		if(a1 >= 0x10000UL){
-			/* bridge socket fd: both pipe ends */
-			close((int)(a1 >> 16));
-			close((int)(a1 & 0xffff));
-		}else
-			close((int)a1);
+		{
+			int i;
+
+			i = sockslot((int)a1);
+			if(i >= 0){
+				close(sockmap[i][2] >> 16);
+				close(sockmap[i][2] & 0xffff);
+				sockmap[i][1] = 0;
+			}else if(a1 >= 0x10000UL){
+				close((int)(a1 >> 16));
+				close((int)(a1 & 0xffff));
+			}else
+				close((int)a1);
+		}
 		r = 0;
 		break;
 	case 8:		/* creat */
@@ -1691,7 +1796,13 @@ dosyscall(Ureg *ur)
 		r = dosocketcall(a1, a2);
 		break;
 	case 359:	/* socket (direct): AF_UNIX only */
-		r = (a1 == 1) ? 0 : -Eacces;
+		if(a1 != 1){
+			r = -Eacces;
+			break;
+		}
+		r = socknewslot(0);
+		if(r < 0)
+			r = -Enomem;
 		break;
 	case 361:	/* bind (direct) */
 		listenfd = a1;
@@ -1699,12 +1810,35 @@ dosyscall(Ureg *ur)
 		break;
 	case 362:	/* connect (direct) */
 		r = sysconnect(a2 + 2);
+		if(r >= 0){
+			int i;
+
+			i = sockslot(a1);
+			if(i >= 0)
+				sockmap[i][2] = r;
+		}
 		break;
 	case 363:	/* listen (direct) */
 		r = 0;
 		break;
+	case 365:	/* getsockopt (direct) */
+		if(a3 > 0x10000)
+			*(int*)a3 = 0;
+		if(a4 > 0x10000)
+			*(int*)a4 = 4;
+		r = 0;
+		break;
 	case 364:	/* accept4 (direct): glibc's accept() on i386 */
 		r = sysaccept();
+		if(r >= 0x10000){
+			int ns;
+
+			ns = socknewslot(r);
+			if(ns < 0)
+				r = -Enomem;
+			else
+				r = ns;
+		}
 		break;
 	case 369:	/* sendto (direct) */
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
@@ -1719,18 +1853,27 @@ dosyscall(Ureg *ur)
 	case 220:	/* getdents64 */
 		r = sysgetdents64((int)a1, a2, a3);
 		break;
-	case 168:	/* poll: everything readable; reads block as needed */
-		if(a3 != 0 && (long)a3 > 0)
-			sleep(a3 > 50 ? 50 : a3);
-		if(a1 != 0){
+	case 168:	/* poll: the timeout must be honored - negative means
+		 * block - or the caller spins at 100% cpu and starves
+		 * the server; reads on the reported fds block as needed */
+		if(a3 == 0){
+			if(a1 == 0 || a2 == 0)
+				sleep(1);
+		}else
+			sleep(50);
+		if(a1 != 0 && a2 != 0){
 			struct Lpollfd { int fd, events, revents; } *pf;
 			long k;
 
 			pf = (struct Lpollfd*)a1;
-			for(k = 0; k < (long)a2; k++)
+			r = 0;
+			for(k = 0; k < (long)a2; k++){
 				pf[k].revents = pf[k].events;
-		}
-		r = a2;
+				if(pf[k].events != 0)
+					r++;
+			}
+		}else
+			r = 0;
 		break;
 	case 142:	/* select: read-set ready, write-set ready, none except */
 		{
