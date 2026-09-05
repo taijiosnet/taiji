@@ -1,0 +1,60 @@
+#!/bin/rc
+rm -f /debian/rootfs/shot.xwd /debian/rootfs/tmp/shot1.xwd /debian/rootfs/tmp/shot2.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'SHELL=/bin/sh linuxrun /usr/bin/xterm -display :0 -geometry +120+120' >[2] /tmp/xterm.log &
+sleep 300
+echo xterm-phase
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +500+400' >[2] /tmp/xeyes.log &
+sleep 240
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot1.xwd' >[2] /tmp/xwd1.log &
+sleep 600
+echo shot1-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' >[2] /tmp/xfwm4.log &
+sleep 420
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xfdesktop --display :0' >[2] /tmp/xfdesktop.log &
+sleep 420
+echo xfdesktop-phase
+debian-session -c 'linuxrun /usr/bin/xfce4-panel --display :0' >[2] /tmp/panel.log &
+sleep 480
+echo panel-phase
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot2-try1
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot2-try2
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot2-try3
+echo shot2-phase
+cp /debian/rootfs/tmp/shot1.xwd /debian/rootfs/shot1.xwd
+cp /debian/rootfs/tmp/shot2.xwd /debian/rootfs/shot2.xwd
+echo shot-ls
+ls -l /debian/rootfs/shot1.xwd /debian/rootfs/shot2.xwd
+echo ps
+ps
+echo log-xwd1
+cat /tmp/xwd1.log
+echo log-xwd2
+cat /tmp/xwd2.log
+echo log-xterm
+sed -n '1,80p' /tmp/xterm.log
+echo log-xfwm4
+sed -n '1,80p' /tmp/xfwm4.log
+echo log-xfdesktop
+sed -n '1,80p' /tmp/xfdesktop.log
+echo log-panel
+sed -n '1,80p' /tmp/panel.log
+echo xfce-full-done

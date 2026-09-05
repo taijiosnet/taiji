@@ -45,7 +45,8 @@ enum {
 	Brkbase = 0x40000000,
 	Brksize = 8*1024*1024,
 	Mapbase = 0x40000000,
-	Mapsize = 64*1024*1024,
+	/* big enough for a GTK program's arenas and thread stacks */
+	Mapsize = 128*1024*1024,
 	Stackbase = 0x60000000,
 	Stacksize = 128*1024,
 
@@ -182,7 +183,27 @@ int nguestsegs;
  * "spid fd" at the socket path; connect opens /proc/spid/fd and hands
  * over its own two data pipes; accept reads the request. */
 int listenerfd = -1;	/* unused: accept polls a queue file now */
+int lisfds[8];		/* every bound listener fd (epoll gating) */
+int nlis;
+int inotifywd;		/* watch-descriptor counter for the inotify stub */
+ulong sysring[32][4];	/* last syscalls: crash forensics */
+int sysri;
+
+/* Fake ptys: a master and a slave file descriptor joined by two
+ * pipes, one per direction, wired through the socket table's packed
+ * (read<<16|write) pairs.  xterm gets a real bidirectional terminal
+ * out of it; there is no job control, but none is emulated anyway. */
+#define NPTY 8
+static struct {
+	int inuse;
+	int m2s[2];	/* master writes, slave reads */
+	int s2m[2];	/* slave writes, master reads */
+	int masterg;	/* guest fd of the master side */
+} ptytab[NPTY];
+
+enum { NRMAX = 512 };
 char boundpath[256];	/* socket path of the active listener */
+char connpath[256];	/* path this process connected to as a client */
 int listenfd = -1;	/* guest fd of the listener socket */
 int nepollsets;
 
@@ -523,6 +544,46 @@ memfind(char *b, int n, char *sub)
 
 static int sockreadfd(int);
 static int sockwritefd(int);
+static long syswritev(ulong, ulong, ulong);
+static long sockread(int, void*, ulong);
+static int sockslot(int);
+static int socknewslot(ulong);
+static int sockinready(int);
+extern int sockmap[16][4];
+
+/* sendmsg: a msghdr carries msg_iov at offset 8, msg_iovlen at 12 */
+static long
+syssendmsg(ulong fd, ulong mh)
+{
+	ulong *m;
+
+	if(mh < 0x10000)
+		return -Efault;
+	m = (ulong*)mh;
+	if(m[2] < 0x10000)
+		return -Efault;
+	return syswritev(fd, m[2], m[3]);
+}
+
+/* recvmsg: one read into the first iovec; spreading the read over
+ * several vectors would block on a partial buffer and deadlock X
+ * clients that expect short reads to return */
+static long
+sysrecvmsg(ulong fd, ulong mh)
+{
+	ulong *m;
+	struct Liovec *v;
+
+	if(mh < 0x10000)
+		return -Efault;
+	m = (ulong*)mh;
+	if(m[2] < 0x10000)
+		return -Efault;
+	v = (struct Liovec*)m[2];
+	if(v[0].len == 0)
+		return 0;
+	return sockread((int)fd, v[0].base, v[0].len);
+}
 
 static long
 syswritev(ulong fd, ulong iov, ulong cnt)
@@ -552,7 +613,11 @@ sysreadv(ulong fd, ulong iov, ulong cnt)
 	struct Liovec *v;
 	long total, n;
 	ulong i;
+	int slot;
 
+	slot = sockslot((int)fd);
+	if(slot >= 0 && sockmap[slot][3] && sockinready((int)fd) <= 0)
+		return -11;		/* -EAGAIN */
 	v = (struct Liovec*)iov;
 	fd = sockreadfd((int)fd);
 	total = 0;
@@ -569,6 +634,48 @@ sysreadv(ulong fd, ulong iov, ulong cnt)
 	return total;
 }
 
+/* open the fake pty master: two pipe pairs joined through the
+ * socket table give both sides bidirectional streams */
+static int
+ptymaster(void)
+{
+	int i;
+
+	for(i = 0; i < NPTY; i++){
+		if(!ptytab[i].inuse){
+			if(pipe(ptytab[i].m2s) < 0 || pipe(ptytab[i].s2m) < 0)
+				return -1;
+			ptytab[i].inuse = 1;
+			ptytab[i].masterg = socknewslot((ptytab[i].s2m[0]<<16) | ptytab[i].m2s[1]);
+			if(ptytab[i].masterg < 0){
+				ptytab[i].inuse = 0;
+				return -1;
+			}
+			return ptytab[i].masterg;
+		}
+	}
+	return -1;
+}
+
+static int
+ptyslave(int n)
+{
+	if(n < 0 || n >= NPTY || !ptytab[n].inuse)
+		return -1;
+	return socknewslot((ptytab[n].m2s[0]<<16) | ptytab[n].s2m[1]);
+}
+
+static int
+ptyindex(int masterg)
+{
+	int i;
+
+	for(i = 0; i < NPTY; i++)
+		if(ptytab[i].inuse && ptytab[i].masterg == masterg)
+			return i;
+	return -1;
+}
+
 static long
 sysopen(ulong path, ulong flags, ulong mode)
 {
@@ -579,6 +686,24 @@ sysopen(ulong path, ulong flags, ulong mode)
 	if(path == 0)
 		return -Efault;
 	p = (char*)path;
+	if(strcmp(p, "/dev/ptmx") == 0){
+		int m;
+
+		m = ptymaster();
+		return m < 0 ? -Enomem : m;
+	}
+	if(strncmp(p, "/dev/pts/", 9) == 0){
+		int s;
+
+		s = ptyslave(strtol(p+9, nil, 10));
+		return s < 0 ? -Enoent : s;
+	}
+	if(strcmp(p, "/dev/tty") == 0 || strcmp(p, "/dev/console") == 0){
+		int c;
+
+		c = open("#c/cons", ORDWR);
+		return c < 0 ? -Enoent : c;
+	}
 	switch(flags & 3){
 	default:
 		return -Einval;
@@ -784,7 +909,7 @@ initsysinfo(void)
  * directly never works because libc passes the socket() return to
  * poll() and recv() unchanged. */
 #define NSOCK 16
-int sockmap[NSOCK][3];	/* [i]: guest fd, active, packed */
+int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
 
 static int
 sockslot(int fd)
@@ -801,6 +926,29 @@ sockslot(int fd)
 /* Allocate a socket-map slot whose guest-visible descriptor is a real
  * plan9 fd number (a #c/pid placeholder): synthetic high ids leak into
  * guest pointer slots and crash later writes through them. */
+static int
+sockmapfd(int fd, ulong packed)
+{
+	int i, j;
+
+	j = -1;
+	for(i = 0; i < NSOCK; i++){
+		if(sockmap[i][1] && sockmap[i][0] == fd){
+			sockmap[i][2] = packed;
+			return i;
+		}
+		if(!sockmap[i][1] && j < 0)
+			j = i;
+	}
+	if(j < 0)
+		return -1;
+	sockmap[j][0] = fd;
+	sockmap[j][1] = 1;
+	sockmap[j][2] = packed;
+	sockmap[j][3] = 0;
+	return j;
+}
+
 static int
 socknewslot(ulong packed)
 {
@@ -857,6 +1005,20 @@ sockwritefd(int fd)
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
+/* read through a bridge socket, honoring the guest's O_NONBLOCK:
+ * an empty pipe must give EAGAIN immediately or XCB's nonblocking
+ * recv wedges the connection forever */
+static long
+sockread(int gfd, void *buf, ulong n)
+{
+	int i;
+
+	i = sockslot(gfd);
+	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0)
+		return -11;		/* -EAGAIN */
+	return read(sockreadfd(gfd), buf, n);
+}
+
 
 /* Publish an fd as /srv/<name>: writing the decimal fd to a fresh
  * /srv file makes the kernel share that channel with any process
@@ -889,8 +1051,14 @@ sysbindlisten(ulong path)
 
 	if(path == 0)
 		return -Efault;
-	if(((uchar*)path)[0] == 0)	/* abstract sockets have no file name */
-		return -Eacces;
+	if(((uchar*)path)[0] == 0){
+		/* abstract sockets have no pathname to publish, but
+		 * failing the bind makes libxtrans tear the transport
+		 * down and Xorg ends up accepting on a dangling
+		 * connection record - report success instead; clients
+		 * reach the pathname listener */
+		return 0;
+	}
 	strncpy(boundpath, (char*)path, sizeof boundpath - 1);
 	boundpath[sizeof boundpath - 1] = 0;
 	/* clients queue connection requests at <path>.q; accept drains
@@ -940,6 +1108,8 @@ sysconnect(ulong path)
 		return -Enomem;
 	/* the two /srv posts ARE the queue: the (nonblocking)
 	 * accept scans /srv for pending x.c.<pid>.a entries */
+	strncpy(connpath, (char*)path, sizeof connpath - 1);
+	connpath[sizeof connpath - 1] = 0;
 	return (s2c[0]<<16) | c2s[1];
 }
 
@@ -1030,11 +1200,9 @@ sysaccept(void)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.a", cpid);
 		rf = open(target, OREAD);
-		if(rf < 0)
-				snprint(target, sizeof target, "/srv/x.c.%d.b", cpid);
+		snprint(target, sizeof target, "/srv/x.c.%d.b", cpid);
 		wf = open(target, OWRITE);
-		if(wf < 0)
-				if(rf < 0 || wf < 0)
+		if(rf < 0 || wf < 0)
 			continue;
 		if(nserved < 32)
 			servedpids[nserved++] = cpid;
@@ -1042,6 +1210,88 @@ sysaccept(void)
 	next: ;
 	}
 	return -11;	/* -EAGAIN */
+}
+
+/* true when a client's pipe ends sit queued in /srv and no accept
+ * has served them yet: posted /srv entries outlive the connection,
+ * so a raw name match would keep the listener "ready" forever */
+static int
+listenqueued(void)
+{
+	char buf[4096];
+	char *p, *q;
+	int fd, n, i, cpid;
+
+	if(nlis == 0)
+		return 0;
+	fd = open("/srv", OREAD);
+	if(fd < 0)
+		return 0;
+	n = readn(fd, buf, sizeof buf-1);
+	close(fd);
+	if(n <= 0)
+		return 0;
+	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
+		cpid = strtol(p+4, &q, 10);
+		if(cpid <= 0 || q[0] != '.' || q[1] != 'a')
+			continue;
+		for(i = 0; i < nserved; i++)
+			if(servedpids[i] == cpid)
+				goto nextq;
+		return 1;
+	nextq: ;
+	}
+	return 0;
+}
+
+/* honest readiness for a bridge socket: a plan9 pipe's stat length
+ * is the queue length (pipestat reports qlen), so POLLIN is exactly
+ * "the pipe holds data"; POLLOUT means the far end is still open */
+static int
+sockinready(int fd)
+{
+	int i, rdy;
+	Dir *d;
+
+	i = sockslot(fd);
+	if(i < 0 || sockmap[i][2] == 0)
+		return -1;		/* not a connected socket */
+	rdy = 0;
+	if((d = dirfstat(sockmap[i][2] >> 16)) != nil){
+		rdy = d->length;
+		free(d);
+	}
+	return rdy;
+}
+
+static int
+islistener(int fd)
+{
+	int i;
+
+	for(i = 0; i < nlis; i++)
+		if(lisfds[i] == fd)
+			return 1;
+	return 0;
+}
+
+/* getsockname/getpeername: a unix-domain address is the bound path;
+ * the client knows the path it connected to, the server its own */
+static long
+syssockname(ulong name, ulong namelen)
+{
+	char *p;
+	int nl;
+
+	if(name < 0x10000 || namelen < 0x10000)
+		return -Efault;
+	p = connpath[0] != 0 ? connpath : boundpath;
+	*(ushort*)name = 1;		/* sun_family = AF_UNIX */
+	strncpy((char*)name+2, p, 104);
+	((char*)name)[2+104-1] = 0;
+	nl = 2 + strlen(p) + 1;
+	*(int*)namelen = nl;
+	return 0;
 }
 
 static long
@@ -1053,6 +1303,7 @@ dosocketcall(ulong subop, ulong argsp)
 	 * and die as a nested note. */
 	ulong *a;
 	long r;
+
 
 	if(argsp == 0 || argsp > 0xffff0000UL)
 		return -Efault;
@@ -1070,6 +1321,8 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 2:		/* bind(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
 		listenfd = a[0];
+		if(nlis < 8)
+			lisfds[nlis++] = a[0];
 		r = sysbindlisten(a[1] + 2);
 		break;
 	case 3:		/* connect(fd,a1=addr,a2=len): sockaddr+2 = sun_path */
@@ -1082,9 +1335,15 @@ dosocketcall(ulong subop, ulong argsp)
 				sockmap[i][2] = r;
 		}
 		break;
+	case 6:		/* getsockname(fd,name,namelen) */
+	case 7:		/* getpeername(fd,name,namelen) */
+		r = syssockname(a[1], a[2]);
+		break;
 	case 4:		/* listen */
 	case 13:	/* shutdown */
-	case 14:	/* setsockopt */
+	case 14:	/* setsockopt: options are ignored */
+		r = 0;
+		break;
 	case 15:	/* getsockopt: report success with a zeroed optval -
 			 * Xlib polls POLLOUT then reads SO_ERROR to learn
 			 * whether a nonblocking connect finished */
@@ -1133,42 +1392,16 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 10:	/* recv(fd,a1=buf,a2=len) */
 	case 12:	/* recvfrom(fd,a1,a2,a3,a4) */
-		r = read(sockreadfd((int)a[0]), (void*)a[1], a[2]);
-		if(r < 0)
+		r = sockread((int)a[0], (void*)a[1], a[2]);
+		if(r < 0 && r != -11)	/* keep EAGAIN */
 			r = -Ebadf;
 		break;
 	case 16:	/* sendmsg: first iovec only; the arg is a msghdr,
 			 * whose msg_iov (offset 8) points at the vectors */
-		{
-			struct Liovec *v;
-			ulong iov;
-
-			iov = ((ulong*)a[1])[2];
-			if(iov < 0x10000){
-				r = -Efault;
-				break;
-			}
-			v = (struct Liovec*)iov;
-			r = write(sockwritefd((int)a[0]), v[0].base, v[0].len);
-			if(r < 0)
-				r = -Ebadf;
-		}
+		r = syssendmsg(a[0], a[1]);
 		break;
 	case 17:	/* recvmsg: msg_iov at msghdr offset 8 */
-		{
-			struct Liovec *v;
-			ulong iov;
-
-			iov = ((ulong*)a[1])[2];
-			if(iov < 0x10000){
-				r = -Efault;
-				break;
-			}
-			v = (struct Liovec*)iov;
-			r = read(sockreadfd((int)a[0]), v[0].base, v[0].len);
-			if(r < 0)
-				r = -Ebadf;
-		}
+		r = sysrecvmsg(a[0], a[1]);
 		break;
 	}
 	return r;
@@ -1351,15 +1584,21 @@ dosyscall(Ureg *ur)
 	a4 = ur->si;
 	a5 = ur->di;
 	r = -Enosys;
+	sysring[sysri%32][0] = nr;
+	sysring[sysri%32][1] = a1;
+	sysring[sysri%32][2] = a2;
+	sysring[sysri%32][3] = a3;
+	sysri++;
 	switch(nr){
 	case 1:		/* exit */
 	case 252:	/* exit_group */
+		fprint(2, "linuxrun: exit status=%lux\n", a1 & 0xff);
 		snprint(exitstr, sizeof exitstr, "%lux", a1 & 0xff);
 		exits(exitstr);
 		return 0;
 	case 3:		/* read */
-		r = read(sockreadfd((int)a1), (void*)a2, a3);
-		if(r < 0)
+		r = sockread((int)a1, (void*)a2, a3);
+		if(r < 0 && r != -11)	/* keep EAGAIN */
 			r = -Ebadf;
 		break;
 	case 4:		/* write */
@@ -1443,7 +1682,71 @@ dosyscall(Ureg *ur)
 		r = brkcur;
 		break;
 	case 54:	/* ioctl */
-		r = -Enotty;
+		if(a2 == 0x80045430){	/* TIOCGPTN: ptsname needs it */
+			int pi;
+
+			pi = ptyindex((int)a1);
+			if(pi < 0 || a3 < 0x10000)
+				r = -Enotty;
+			else{
+				*(int*)a3 = pi;
+				r = 0;
+			}
+		}else if(a2 == 0x540d){		/* TIOCGETD: N_TTY */
+			if(a3 < 0x10000)
+				r = -Efault;
+			else{
+				*(int*)a3 = 0;
+				r = 0;
+			}
+		}else if(a2 == 0x5401){		/* TCGETS: a sane cooked
+			 * terminal satisfies xterm's spawn */
+			if(a3 < 0x10000)
+				r = -Efault;
+			else{
+				ulong *t;
+
+				t = (ulong*)a3;
+				t[0] = 0x500 | 0x400 | 0x100;	/* ICRNL|IXON... */
+				t[1] = 0x1 | 0x4;		/* OPOST|ONLCR */
+				t[2] = 0xbf;			/* B38400|CS8|CREAD */
+				t[3] = 0x8b3;			/* ISIG|ICANON|ECHO */
+				((uchar*)a3)[16] = 0;		/* c_line */
+				memset((uchar*)a3+17, 0x7f, 19);
+				((uchar*)a3)[17] = 3;		/* VINTR ^C */
+				r = 0;
+			}
+		}else if(a2 == 0x5413){		/* TIOCGWINSZ */
+			if(a3 < 0x10000)
+				r = -Efault;
+			else{
+				((ushort*)a3)[0] = 24;	/* rows */
+				((ushort*)a3)[1] = 80;	/* cols */
+				((ushort*)a3)[2] = 0;
+				((ushort*)a3)[3] = 0;
+				r = 0;
+			}
+		}else if(a2 == 0x5410 || a2 == 0x80047476){ /* TIOCGPGRP,
+					TIOCSPTLCK: report pgrp 0, no lock */
+			if(a3 > 0x10000)
+				*(int*)a3 = 0;
+			r = 0;
+		}else if(a2 == 0x541b){		/* FIONREAD: bytes queued */
+			if(a3 < 0x10000)
+				r = -Efault;
+			else{
+				int q;
+
+				q = sockinready((int)a1);
+				*(int*)a3 = q > 0 ? q : 0;
+				r = 0;
+			}
+		}else if(a2 == 0x5402 || a2 == 0x5403 || a2 == 0x5404 ||
+		    a2 == 0x540e || a2 == 0x5410 || a2 == 0x5414 ||
+		    a2 == 0x541f || a2 == 0x5421 || a2 == 0x40045431)
+			r = 0;			/* termios sets: accept */
+		else
+			r = -Enotty;
 		break;
 	case 90:	/* old_mmap: ebx points at the arg struct */
 		{
@@ -1651,36 +1954,39 @@ dosyscall(Ureg *ur)
 	case 256:	/* epoll_wait_old */
 		{
 			ulong *ev;
-			char tbuf[4096];
 			int i, maxev, n;
 
 			ev = (ulong*)a2;
 			maxev = (int)a3;
 			n = 0;
 			for(i = 0; i < Maxep && n < maxev; i++){
+				int evv, slot;
+
 				if(eptab[i].epfd != (int)a1)
 					continue;
-				/* the listener is readable only when a
-				 * connection is queued; reporting it
-				 * otherwise makes the server spin in
+				/* the listener is readable only while an
+				 * unserved connection is queued; reporting
+				 * it otherwise makes the server spin in
 				 * failing accepts */
-				if(eptab[i].fd == listenfd && listenfd >= 0){
-					int qfd, qn;
-
-					qfd = open("/srv", OREAD);
-					if(qfd < 0)
-						continue;
-					qn = readn(qfd, tbuf, sizeof tbuf-1);
-					close(qfd);
-					/* the marshaled dir stream carries NUL
-					 * bytes in qid/type fields: strstr
-					 * stops at the first one, so scan by
-					 * length instead */
-					if(qn <= 0 || memfind(tbuf, qn, "x.c.") == nil)
-						continue;
-				}
+				if(islistener((int)eptab[i].fd) && !listenqueued())
+					continue;
+				/* connected bridge sockets: EPOLLIN only
+				 * when the pipe holds data, else the
+				 * server reads before the client has sent
+				 * anything and both ends block */
+				evv = eptab[i].events & 0xffffffff;
+				slot = sockslot((int)eptab[i].fd);
+				if(slot >= 0 && sockmap[slot][2] != 0 &&
+				    (evv & 1) && sockinready((int)eptab[i].fd) <= 0)
+					evv &= ~1;
+				/* report readiness only: registration flags
+				 * like EPOLLET must not come back, Xorg
+				 * reads any extra bit as a socket error */
+				evv &= 5;	/* EPOLLIN|EPOLLOUT */
+				if(evv == 0)
+					continue;
 				if(ev != nil){
-					ev[n*3] = eptab[i].events & 0xffffffff;
+					ev[n*3] = evv;
 					ev[n*3+1] = (ulong)eptab[i].data;
 					ev[n*3+2] = 0;
 				}
@@ -1759,6 +2065,11 @@ dosyscall(Ureg *ur)
 				forksnap = !(nr == 120 && (a1 & LcVmnul));
 				if(!forksnap && a2 != 0)
 					ur->sp = a2;	/* thread switch stack */
+				if(nr == 120 && a4 != 0)
+					syssetthreadarea(a4);	/* CLONE_SETTLS:
+					 * without a TLS of its own the
+					 * thread's first canary access
+					 * trips the stack protector */
 				/* Returning through the handler would call
 				 * noted() without a pending note and kill us.
 				 * Bounce off our own ud2 starter instead:
@@ -1854,6 +2165,8 @@ dosyscall(Ureg *ur)
 		break;
 	case 361:	/* bind (direct) */
 		listenfd = a1;
+		if(nlis < 8)
+			lisfds[nlis++] = a1;
 		r = sysbindlisten(a2 + 2);
 		break;
 	case 362:	/* connect (direct) */
@@ -1867,13 +2180,21 @@ dosyscall(Ureg *ur)
 		}
 		break;
 	case 363:	/* listen (direct) */
+	case 366:	/* setsockopt (direct) */
+	case 373:	/* shutdown (direct) */
 		r = 0;
 		break;
-	case 365:	/* getsockopt (direct) */
-		if(a3 > 0x10000)
-			*(int*)a3 = 0;
+	case 367:	/* getsockname (direct) */
+	case 368:	/* getpeername (direct) */
+		r = syssockname(a2, a3);
+		break;
+	case 365:	/* getsockopt (direct): args are fd, level, optname,
+			 * optval, optlen - optval/a4 is the only pointer
+			 * worth writing, optlen/a5 gets its size */
 		if(a4 > 0x10000)
-			*(int*)a4 = 4;
+			*(int*)a4 = 0;
+		if(a5 > 0x10000)
+			*(int*)a5 = 4;
 		r = 0;
 		break;
 	case 364:	/* accept4 (direct): glibc's accept() on i386 */
@@ -1893,63 +2214,129 @@ dosyscall(Ureg *ur)
 		if(r < 0)
 			r = -Ebadf;
 		break;
+	case 370:	/* sendmsg (direct): glibc routes xcb's sendmsg here */
+		r = syssendmsg(a1, a2);
+		break;
 	case 371:	/* recvfrom (direct) */
-		r = read(sockreadfd((int)a1), (void*)a2, a3);
-		if(r < 0)
+		r = sockread((int)a1, (void*)a2, a3);
+		if(r < 0 && r != -11)	/* keep EAGAIN */
 			r = -Ebadf;
+		break;
+	case 372:	/* recvmsg (direct) */
+		r = sysrecvmsg(a1, a2);
 		break;
 	case 220:	/* getdents64 */
 		r = sysgetdents64((int)a1, a2, a3);
 		break;
-	case 168:	/* poll: the timeout must be honored - negative means
-		 * block - or the caller spins at 100% cpu and starves
-		 * the server; reads on the reported fds block as needed */
-		if(a3 == 0){
-			if(a1 == 0 || a2 == 0)
-				sleep(1);
-		}else
-			sleep(50);
+	case 168:	/* poll: bridge sockets report POLLIN only when the
+		 * pipe actually holds data - a lying POLLIN makes xcb
+		 * read before it has written its setup request and
+		 * deadlock both ends of the connection; a blocking poll
+		 * must also not return zero ready fds or xcb's read
+		 * loop declares the connection dead */
 		if(a1 != 0 && a2 != 0){
-			struct Lpollfd { int fd, events, revents; } *pf;
-			long k;
+			/* struct pollfd: fd(4), events(2), revents(2) */
+			struct Lpollfd { int fd; ushort events, revents; } *pf;
+			long tleft, k;
 
 			pf = (struct Lpollfd*)a1;
-			r = 0;
-			for(k = 0; k < (long)a2; k++){
-				pf[k].revents = pf[k].events;
-				if(pf[k].events != 0)
-					r++;
+			tleft = (long)a3;	/* ms; negative blocks */
+			for(;;){
+				r = 0;
+				for(k = 0; k < (long)a2; k++){
+					int ev, re;
+
+					ev = pf[k].events;
+					re = 0;
+					if(sockslot(pf[k].fd) >= 0){
+						if(sockmap[sockslot(pf[k].fd)][2] != 0){
+							if(ev & 0x4)		/* POLLOUT */
+								re |= 0x4;
+							if((ev & 0x1) && sockinready(pf[k].fd) > 0)
+								re |= 0x1;	/* POLLIN */
+						}else if((ev & 0x1) && listenqueued())
+							re |= 0x1;	/* the listener */
+					}else
+						re = ev;	/* passthrough fds stay ready */
+					pf[k].revents = re;
+					if(re != 0)
+						r++;
+				}
+				if(r > 0 || tleft == 0)
+					break;
+				if(tleft > 0 && tleft <= 20){
+					sleep(tleft);
+					tleft = 0;
+					continue;
+				}
+				sleep(20);
+				if(tleft > 0)
+					tleft -= 20;
 			}
-		}else
+		}else{
+			if(a3 == 0)
+				sleep(1);
+			else
+				sleep(50);
 			r = 0;
+		}
 		break;
-	case 142:	/* select: read-set ready, write-set ready, none except */
+	case 308:	/* pselect6: same shape as select; the
+		 * signal-mask argument is ignored */
+	case 142:	/* select: honest readiness - a lying read-ready set
+		 * makes the server read before the client has sent
+		 * anything (and block), while clearing requested bits
+		 * hides clients from the dispatcher entirely */
 		{
+			ulong rin[32], win[32];
 			ulong *rd, *wr, *ex;
 			int maxfd, k, nready;
 
 			maxfd = (int)a1;
+			if(maxfd > 1024)
+				maxfd = 1024;
+			memset(rin, 0, sizeof rin);
+			memset(win, 0, sizeof win);
+			if(a2 != 0)
+				memmove(rin, (void*)a2, (maxfd+7)/8);
+			if(a3 != 0)
+				memmove(win, (void*)a3, (maxfd+7)/8);
+			/* zero-timeout selects poll without sleeping;
+			 * everything else breathes between iterations */
+			if(a5 == 0 || (((ulong*)a5)[0] | ((ulong*)a5)[1]) != 0)
+				sleep(50);
 			rd = (ulong*)a2;
 			wr = (ulong*)a3;
 			ex = (ulong*)a4;
+			if(rd != nil) memset(rd, 0, 128);
+			if(wr != nil) memset(wr, 0, 128);
+			if(ex != nil) memset(ex, 0, 128);
 			nready = 0;
 			for(k = 0; k < maxfd; k++){
-				if(rd != nil && k/32 < 32 && (rd[k/32]>>(k%32)) & 1)
+				int slot;
+
+				if((rin[k/32]>>(k%32)) & 1){
+					int re;
+
+					slot = sockslot(k);
+					if(slot >= 0){
+						if(sockmap[slot][2] != 0)
+							re = sockinready(k) > 0;
+						else
+							re = listenqueued();
+					}else
+						re = 1;
+					if(re){
+						rd[k/32] |= 1UL<<(k%32);
+						nready++;
+					}
+				}
+				if((win[k/32]>>(k%32)) & 1){
+					wr[k/32] |= 1UL<<(k%32);
 					nready++;
+				}
 			}
-			if(rd != nil && maxfd > 0 && maxfd <= 1024){
-				for(k = 0; k*32 < maxfd && k < 32; k++)
-					if(k == maxfd/32+1 || maxfd >= 32)
-						rd[k] &= (1UL<<(maxfd%32))-1;
-			}
-			USED(wr); USED(ex);
 			r = nready;
-			/* a timeout of 0 polls; otherwise sleep briefly so the
-			 * server loop does not spin */
-			if(a5 != 0 && ((ulong*)a5)[0] == 0 && ((ulong*)a5)[1] == 0)
-				;
-			else
-				sleep(1);
 		}
 		break;
 	case 42:	/* pipe */
@@ -2011,6 +2398,13 @@ dosyscall(Ureg *ur)
 		r = dup((int)a1, -1);
 		if(r < 0)
 			r = -Ebadf;
+		else{
+			int i;
+
+			i = sockslot((int)a1);
+			if(i >= 0)
+				sockmapfd(r, sockmap[i][2]);
+		}
 		break;
 	case 63:	/* dup2 */
 		if(a2 == a1){
@@ -2021,12 +2415,26 @@ dosyscall(Ureg *ur)
 		r = dup((int)a1, (int)a2);
 		if(r < 0)
 			r = -Ebadf;
+		else{
+			int i;
+
+			i = sockslot((int)a1);
+			if(i >= 0)
+				sockmapfd(r, sockmap[i][2]);
+		}
 		break;
-	case 332:	/* dup3: flags ignored */
+	case 330:	/* dup3: flags ignored */
 		close((int)a2);
 		r = dup((int)a1, (int)a2);
 		if(r < 0)
 			r = -Ebadf;
+		else{
+			int i;
+
+			i = sockslot((int)a1);
+			if(i >= 0)
+				sockmapfd(r, sockmap[i][2]);
+		}
 		break;
 	case 39:	/* mkdir */
 		if(create((char*)a1, OREAD, DMDIR|0777) < 0)
@@ -2055,9 +2463,36 @@ dosyscall(Ureg *ur)
 			r = dup((int)a1, -1);
 			if(r < 0)
 				r = -Ebadf;
+			else{
+				int i;
+
+				i = sockslot((int)a1);
+				if(i >= 0)
+					sockmapfd(r, sockmap[i][2]);
+			}
 			break;
 		case 3:	/* GETFL */
 			r = 2;
+			{
+				int i;
+
+				i = sockslot((int)a1);
+				if(i >= 0 && sockmap[i][3])
+					r = 0x802;	/* O_RDWR|O_NONBLOCK */
+			}
+			break;
+		case 4:	/* SETFL: remember O_NONBLOCK on bridge sockets -
+			 * XCB and Xorg both read sockets expecting EAGAIN
+			 * when empty, and a blocking read deadlocks the
+			 * whole connection */
+			{
+				int i;
+
+				i = sockslot((int)a1);
+				if(i >= 0)
+					sockmap[i][3] = (a3 & 0x800) != 0;
+			}
+			r = 0;
 			break;
 		default:
 			r = 0;
@@ -2068,6 +2503,87 @@ dosyscall(Ureg *ur)
 		break;
 	case 64:	/* getppid (61 is ustat) */
 		r = 1;
+		break;
+	case 37:	/* kill: cross-process notes are not wired; the
+			 * senders only probe, so report success */
+	case 57:	/* setpgid */
+	case 27:	/* alarm */
+	case 311:	/* set_robust_list */
+	case 386:	/* rseq */
+	case 65:	/* getgroups: root, no supplementary groups */
+	case 241:	/* sched_setaffinity */
+		r = 0;
+		break;
+	case 242:	/* sched_getaffinity: one cpu, mask filled in */
+		if(a3 > 0 && a4 > 0x10000)
+			memset((void*)a4, 0xff, a3 < 128 ? a3 : 128);
+		r = a3 < 128 ? a3 : 128;
+		break;
+	case 116:	/* sysinfo: a struct of counters, zeroed apart
+			 * from the memory totals GLib likes to see */
+		if(a1 < 0x10000)
+			r = -Efault;
+		else{
+			memset((void*)a1, 0, 64);
+			((ulong*)a1)[1] = 512*1024*1024;	/* totalram */
+			((ulong*)a1)[2] = 256*1024*1024;	/* freeram */
+			((ulong*)a1)[13] = 512;			/* mem_unit */
+			r = 0;
+		}
+		break;
+	case 328:	/* eventfd2: a pipe stands in; the counter
+			 * semantics are approximated by the stream */
+	case 290:	/* mlock */
+		{
+			int p[2];
+
+			if(pipe(p) < 0)
+				r = -Enomem;
+			else{
+				close(p[1]);
+				r = p[0];
+			}
+		}
+		break;
+	case 403:	/* clock_gettime64 */
+	case 408:	/* clock_gettime64 alias used by some stubs */
+		if(a2 < 0x10000)
+			r = -Efault;
+		else{
+			vlong t;
+
+			t = nsec();
+			((vlong*)a2)[0] = t/1000000000;
+			((vlong*)a2)[1] = t%1000000000;
+			r = 0;
+		}
+		break;
+	case 422:	/* futex_time64 */
+		r = dofutex(a1, a2, a3, a4);
+		break;
+	case 99:	/* statfs: buf is the second argument, 84 bytes */
+		if(a2 > 0x10000)
+			memset((void*)a2, 0, 84);
+		r = 0;
+		break;
+	case 268:	/* statfs64: buf is the third argument and is
+		 * exactly 84 bytes on i386 - bigger smashes callers */
+		if(a3 > 0x10000)
+			memset((void*)a3, 0, 84);
+		r = 0;
+		break;
+	case 209:	/* getresuid32 */
+	case 211:	/* getresgid32 */
+		if(a1 > 0x10000)
+			*(ulong*)a1 = 0;
+		if(a2 > 0x10000)
+			*(ulong*)a2 = 0;
+		if(a3 > 0x10000)
+			*(ulong*)a3 = 0;
+		r = 0;
+		break;
+	case 40:	/* rmdir */
+		r = remove((char*)a1) < 0 ? -Eacces : 0;
 		break;
 	case 114:	/* wait4(-1, status*, 0, nil): reap one child */
 		{
@@ -2094,7 +2610,37 @@ dosyscall(Ureg *ur)
 	case 23:	/* setuid */
 	case 46:	/* setgid */
 	case 94:	/* setgroups */
+	case 291:	/* inotify_init: no events are ever reported, so a
+			 * quiet placeholder fd satisfies GLib monitors */
+	case 332:	/* inotify_init1 */
+		{
+			int p[2];
+
+			if(pipe(p) < 0)
+				r = -Enomem;
+			else{
+				close(p[1]);
+				r = p[0];
+			}
+		}
+		break;
+	case 292:	/* inotify_add_watch */
+		r = ++inotifywd;
+		break;
+	case 293:	/* inotify_rm_watch */
 		r = 0;
+		break;
+	default:
+		/* name the gap once: an unimplemented call that a
+		 * program depends on shows up here before it dies */
+		{
+			static uchar seen[NRMAX/8+1];
+
+			if(nr < NRMAX && !(seen[nr/8] & (1<<(nr%8)))){
+				seen[nr/8] |= 1<<(nr%8);
+				fprint(2, "linuxrun: unimplemented syscall %lud\n", nr);
+			}
+		}
 		break;
 	}
 	if(verbose)
@@ -2118,6 +2664,13 @@ traphandler(void *v, char *msg)
 	if(v == nil)
 		return 0;
 	ur = v;
+	if(msg != nil && strcmp(msg, "linux sys") != 0 &&
+	    strncmp(msg, "sys: trap: invalid opcode", 25) != 0){
+		static int z;
+
+		if(z++ < 20)
+			fprint(2, "linuxrun: note: %s\n", msg);
+	}
 	if(msg != nil && strcmp(msg, "linux sys") == 0){
 		/* the kernel gates guest int $0x80 here (devldt procs) */
 		if(!started){
@@ -2149,10 +2702,20 @@ traphandler(void *v, char *msg)
 			ulong *stk;
 			int i;
 
-			fprint(2, "linuxrun: guest fault trap=%lux pc=%lux sp=%lux\n",
-				ur->trap, ur->pc, ur->sp);
+			fprint(2, "linuxrun: guest fault trap=%lux pc=%lux sp=%lux bx=%lux bxptr=%lux\n",
+				ur->trap, ur->pc, ur->sp, ur->bx,
+				ur->bx > 0x10000 && ur->bx < 0x70000000 ? *(ulong*)ur->bx : 0);
 			fprint(2, "linuxrun: ax=%lux bx=%lux cx=%lux dx=%lux si=%lux di=%lux bp=%lux\n",
 				ur->ax, ur->bx, ur->cx, ur->dx, ur->si, ur->di, ur->bp);
+			for(i = 0; i < 32; i++){
+				int ri;
+
+				ri = (sysri+i) % 32;
+				if(sysring[ri][0] != 0)
+					fprint(2, "linuxrun:  sys-%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
+						i, sysring[ri][0], sysring[ri][1], sysring[ri][2], sysring[ri][3]);
+			}
+			dumpsegments();
 			stk = (ulong*)ur->sp;
 			for(i = 0; i < 12; i++)
 				fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);
@@ -2187,24 +2750,77 @@ traphandler(void *v, char *msg)
 		forkpending = 0;
 		*ur = forkregs;
 		if(forksnap){
-			int s;
-			ulong va, len;
-			uchar *tmp;
+			int s, tfd;
+			ulong va, len, ulen, a;
+			char snapname[64];
+			static uchar pg[Pgsz];
 
 			forksnap = 0;
+			/* Copy the image through a scratch file, one page
+			 * at a time, skipping untouched (all-zero) pages:
+			 * fresh "memory" attachments come back zeroed, and
+			 * neither a big malloc nor an extra segment is
+			 * available inside this note handler. */
+			snprint(snapname, sizeof snapname,
+				"/tmp/lrsnap.%d", getpid());
+			tfd = create(snapname, ORDWR|OTRUNC, 0600);
+			if(tfd < 0){
+				fprint(2, "linuxrun: fork snap create: %r\n");
+				exits("fork snapshot");
+			}
 			for(s = 0; s < nguestsegs; s++){
 				va = guestsegs[s][0];
-				len = guestsegs[s][1];
-				tmp = malloc(len);
-				if(tmp == nil)
-					exits("fork snapshot");
-				memmove(tmp, (void*)va, len);
-				segdetach((void*)va);
-				if(segattach(0, "memory", (void*)va, len) == (void*)-1)
-					exits("fork attach");
-				memmove((void*)va, tmp, len);
-				free(tmp);
+				len = ulen = guestsegs[s][1];
+				if(va == Mapbase)
+					ulen = mapbump - Mapbase;
+				for(a = 0; a < ulen; a += Pgsz){
+					ulong hdr[2];
+					uchar *pp;
+					int k, nz;
+
+					pp = (uchar*)va + a;
+					nz = 0;
+					for(k = 0; k < Pgsz; k += sizeof(ulong))
+						if(*(ulong*)(pp+k) != 0){
+							nz = 1;
+							break;
+						}
+					if(!nz)
+						continue;
+					hdr[0] = (ulong)pp;
+					hdr[1] = Pgsz;
+					if(write(tfd, hdr, 8) != 8 ||
+					    write(tfd, pp, Pgsz) != Pgsz){
+						fprint(2, "linuxrun: fork snap write: %r\n");
+						exits("fork snapshot");
+					}
+				}
 			}
+			for(s = 0; s < nguestsegs; s++){
+				va = guestsegs[s][0];
+				segdetach((void*)va);
+				if(segattach(0, "memory", (void*)va, guestsegs[s][1]) == (void*)-1){
+					fprint(2, "linuxrun: fork attach %#lux %#lux: %r\n",
+						va, guestsegs[s][1]);
+					exits("fork attach");
+				}
+			}
+			seek(tfd, 0, 0);
+			for(;;){
+				ulong hdr[2];
+				long n;
+
+				n = readn(tfd, hdr, 8);
+				if(n < 8)
+					break;
+				if(readn(tfd, pg, Pgsz) != Pgsz){
+					fprint(2, "linuxrun: fork snap read: %r\n");
+					exits("fork snapshot");
+				}
+				memmove((void*)hdr[0], pg, Pgsz);
+			}
+			close(tfd);
+			remove(snapname);
 		}
 		if(forkready[1] >= 0){
 			write(forkready[1], "x", 1);

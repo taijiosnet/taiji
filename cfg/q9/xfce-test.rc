@@ -1,0 +1,62 @@
+#!/bin/rc
+rm -f /debian/rootfs/shot.xwd /debian/rootfs/tmp/shot.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot.xwd' >[2] /tmp/xwd.log &
+sleep 60
+echo m1
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m1
+sleep 60
+echo m2
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m2
+sleep 60
+echo m3
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m3
+sleep 60
+echo m4
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m4
+sleep 60
+echo m5
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m5
+sleep 60
+echo m6
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m6
+sleep 60
+echo m7
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m7
+sleep 60
+echo m8
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m8
+sleep 60
+echo m9
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m9
+sleep 60
+echo m10
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m10
+sleep 60
+echo m11
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m11
+sleep 60
+echo m12
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m12
+sleep 60
+echo m13
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m13
+sleep 60
+echo m14
+if(test -e /debian/rootfs/tmp/shot.xwd) echo GOT-m14
+echo srv
+ls /srv
+echo ps
+ps
+echo xvfb-tail
+sed -n '1,150p' /tmp/xvfb.log | grep -v 'clock'
+echo xwd-tail
+sed -n '1,260p' /tmp/xwd.log
+echo shot-ls
+cp /debian/rootfs/tmp/shot.xwd /debian/rootfs/shot.xwd; ls -l /debian/rootfs/shot.xwd
+sleep 10
+echo xfce-test-done
