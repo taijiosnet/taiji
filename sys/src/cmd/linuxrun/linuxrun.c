@@ -810,7 +810,10 @@ fillstat64(ulong addr, int fd)
 	if(d->mode & DMDIR)
 		*(ulong*)(b+16) = 0x41ed;	/* S_IFDIR|0755 */
 	else
-		*(ulong*)(b+16) = 0x81a4;	/* S_IFREG|0444 */
+		*(ulong*)(b+16) = (d->mode & 0111) ?
+			0x81ed : 0x81a4;	/* S_IFREG|0755 : |0444;
+					 * the x bits gate xterm's shell
+					 * check and glib's program search */
 	*(ulong*)(b+20) = 1;			/* nlink */
 	*(ulong*)(b+12) = (ulong)d->qid.path;	/* __st_ino */
 	*(vlong*)(b+88) = d->qid.path;	/* st_ino: ld.so dedups libraries
@@ -2673,6 +2676,21 @@ traphandler(void *v, char *msg)
 	if(v == nil)
 		return 0;
 	ur = v;
+	if(msg != nil && strstr(msg, "write on closed pipe") != nil){
+		/* Linux programs expect write() to fail with EPIPE
+		 * (every toolkit ignores SIGPIPE); letting this note
+		 * take its default disposition kills whoever touches
+		 * a dead client's socket - the whole desktop follows */
+		return 1;
+	}
+	if(msg != nil && strstr(msg, "pipe") != nil){
+		int q;
+
+		fprint(2, "linuxrun: pipenote unmatched:");
+		for(q = 0; q < 40 && msg[q]; q++)
+			fprint(2, " %2.2ux", (uchar)msg[q]);
+		fprint(2, "\n");
+	}
 	if(msg != nil && strcmp(msg, "linux sys") != 0 &&
 	    strncmp(msg, "sys: trap: invalid opcode", 25) != 0){
 		static int z;
