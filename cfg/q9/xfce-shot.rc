@@ -1,5 +1,5 @@
 #!/bin/rc
-rm -f /debian/rootfs/tmp/shot1.xwd
+rm -f /debian/rootfs/tmp/shot1.xwd /debian/rootfs/tmp/shot2.xwd
 mkdir -p /debian/rootfs/tmp/.X11-unix
 rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
 debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
@@ -9,22 +9,19 @@ debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2=1
 sleep 300
 echo xeyes-phase
 debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' >[2=1] /tmp/xfwm4.log &
-sleep 600
+sleep 900
 echo xfwm4-phase
 debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot1.xwd' >[2] /tmp/xwd1.log &
-sleep 600
+sleep 660
 echo shot-try1
-if(! test -e /debian/rootfs/tmp/shot1.xwd){
-	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot1.xwd' >[2] /tmp/xwd1.log &
-	sleep 600
-}
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+sleep 660
 echo shot-try2
 cp /debian/rootfs/tmp/shot1.xwd /debian/rootfs/shot1.xwd
-ls -l /debian/rootfs/shot1.xwd
+cp /debian/rootfs/tmp/shot2.xwd /debian/rootfs/shot2.xwd
+ls -l /debian/rootfs/shot1.xwd /debian/rootfs/shot2.xwd
 echo ps
 ps
 echo xfwm4-log
 sed -n '1,40p' /tmp/xfwm4.log
-echo xwd-log
-sed -n '1,20p' /tmp/xwd1.log
 echo xfce-shot-done

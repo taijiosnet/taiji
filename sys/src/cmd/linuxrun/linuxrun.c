@@ -29,7 +29,8 @@ enum {
 	PtInterp = 3,
 
 	Piebase = 0x08000000,	/* where PIE mains land */
-	Interpbase = 0x48000000,/* where ld-linux lands */
+	Interpbase = 0x68000000,/* where ld-linux lands: clear of the
+				 * map segment and the guest stack */
 
 	LcVmnul = 0x100,	/* CLONE_VM */
 	Enoexec = 8,
@@ -46,7 +47,9 @@ enum {
 	Brksize = 8*1024*1024,
 	Mapbase = 0x40000000,
 	/* big enough for a GTK program's arenas and thread stacks */
-	Mapsize = 128*1024*1024,
+	/* big enough for a GTK program's arenas, fontconfig and
+	 * the pango worker-thread stacks */
+	Mapsize = 512*1024*1024,
 	Stackbase = 0x60000000,
 	Stacksize = 128*1024,
 
@@ -2681,6 +2684,7 @@ traphandler(void *v, char *msg)
 		 * (every toolkit ignores SIGPIPE); letting this note
 		 * take its default disposition kills whoever touches
 		 * a dead client's socket - the whole desktop follows */
+		fprint(2, "linuxrun: pipenote handled\n");
 		return 1;
 	}
 	if(msg != nil && strstr(msg, "pipe") != nil){
