@@ -549,6 +549,8 @@ static int sockreadfd(int);
 static int sockwritefd(int);
 static long syswritev(ulong, ulong, ulong);
 static long sockread(int, void*, ulong);
+static void sockopc(int, void*, long, int);
+static void dumpopc(void);
 static int sockslot(int);
 static int socknewslot(ulong);
 static int sockinready(int);
@@ -600,10 +602,14 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 {
 	struct Liovec *v;
 	long total, n;
+	int slot;
 	ulong i;
 
 	v = (struct Liovec*)iov;
+	slot = sockslot((int)fd);
 	fd = sockwritefd((int)fd);
+	if(cnt > 0 && v[0].len > 0)
+		sockopc(slot, v[0].base, v[0].len, 1);
 	total = 0;
 	for(i = 0; i < cnt; i++)
 		total += v[i].len;
@@ -923,6 +929,68 @@ initsysinfo(void)
  * poll() and recv() unchanged. */
 #define NSOCK 16
 int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
+/* X-protocol forensics: first byte of every write (request opcode) and
+ * read (event/reply type) through a bridge socket, counted per slot */
+int wopc[NSOCK][256];
+int ropc[NSOCK][256];
+
+static void
+sockopc(int slot, void *buf, long n, int wr)
+{
+	static int npr;
+	int op;
+
+	if(slot < 0 || n <= 0 || buf == nil)
+		return;
+	op = ((uchar*)buf)[0];
+	if(wr)
+		wopc[slot][op]++;
+	else
+		ropc[slot][op]++;
+	/* live frame-lifecycle trace: the requests that map and
+	 * reparent, and the events that acknowledge them */
+	if(npr < 120){
+		char what[64];
+
+		what[0] = 0;
+		if(wr){
+			if(op == 8) snprint(what, sizeof what, "MapWindow");
+			if(op == 9) snprint(what, sizeof what, "MapSubwindows");
+			if(op == 64) snprint(what, sizeof what, "ReparentWindow");
+		}else{
+			if(op == 12) snprint(what, sizeof what, "Expose");
+			if(op == 19) snprint(what, sizeof what, "MapNotify");
+			if(op == 21) snprint(what, sizeof what, "ReparentNotify");
+			if(op == 22) snprint(what, sizeof what, "ConfigureNotify");
+		}
+		if(what[0]){
+			npr++;
+			fprint(2, "linuxrun: XOP g%d %s %s\n",
+				sockmap[slot][0], wr ? "send" : "recv", what);
+		}
+	}
+}
+
+static void
+dumpopc(void)
+{
+	int i, k, n;
+
+	for(i = 0; i < NSOCK; i++){
+		if(!sockmap[i][1])
+			continue;
+		n = 0;
+		for(k = 0; k < 256; k++){
+			if(wopc[i][k] || ropc[i][k]){
+				fprint(2, "linuxrun: OPC g%d %s %d=%d/%d\n",
+					sockmap[i][0], k < 128 ? "req" : "evt",
+					k, wopc[i][k], ropc[i][k]);
+				if(++n > 24)
+					break;
+			}
+		}
+	}
+}
 
 static int
 sockslot(int fd)
@@ -1029,7 +1097,10 @@ sockread(int gfd, void *buf, ulong n)
 	i = sockslot(gfd);
 	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0)
 		return -11;		/* -EAGAIN */
-	return read(sockreadfd(gfd), buf, n);
+	i = read(sockreadfd(gfd), buf, n);
+	if(i > 0)
+		sockopc(sockslot(gfd), buf, i, 0);
+	return i;
 }
 
 
@@ -1400,6 +1471,8 @@ dosocketcall(ulong subop, ulong argsp)
 	case 9:		/* send(fd,a1=buf,a2=len) */
 	case 11:	/* sendto(fd,a1,a2,a3,a4) */
 		r = write(sockwritefd((int)a[0]), (void*)a[1], a[2]);
+		if(r > 0)
+			sockopc(sockslot((int)a[0]), (void*)a[1], r, 1);
 		if(r < 0)
 			r = -Ebadf;
 		break;
@@ -1597,6 +1670,26 @@ dosyscall(Ureg *ur)
 	a4 = ur->si;
 	a5 = ur->di;
 	r = -Enosys;
+	{
+		static int flowc;
+		int si, sk, a, b;
+
+		if(++flowc >= 2000){
+			flowc = 0;
+			for(si = 0; si < NSOCK; si++){
+				if(!sockmap[si][1])
+					continue;
+				a = b = 0;
+				for(sk = 0; sk < 256; sk++){
+					a += wopc[si][sk];
+					b += ropc[si][sk];
+				}
+				if(a || b)
+					fprint(2, "linuxrun: FLOW g%d wr=%d rd=%d\n",
+						sockmap[si][0], a, b);
+			}
+		}
+	}
 	sysring[sysri%32][0] = nr;
 	sysring[sysri%32][1] = a1;
 	sysring[sysri%32][2] = a2;
@@ -1605,6 +1698,7 @@ dosyscall(Ureg *ur)
 	switch(nr){
 	case 1:		/* exit */
 	case 252:	/* exit_group */
+		dumpopc();
 		fprint(2, "linuxrun: exit status=%lux\n", a1 & 0xff);
 		snprint(exitstr, sizeof exitstr, "%lux", a1 & 0xff);
 		exits(exitstr);
@@ -1616,6 +1710,8 @@ dosyscall(Ureg *ur)
 		break;
 	case 4:		/* write */
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
+		if(r > 0)
+			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
 			r = -Ebadf;
 		break;
@@ -2224,6 +2320,8 @@ dosyscall(Ureg *ur)
 		break;
 	case 369:	/* sendto (direct) */
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
+		if(r > 0)
+			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
 			r = -Ebadf;
 		break;
