@@ -1,0 +1,40 @@
+#!/bin/rc
+rm -f /debian/rootfs/tmp/shot2.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xfdesktop --display :0' >[2] /tmp/xfdesktop.log &
+sleep 480
+echo xfdesktop-phase
+debian-session -c 'linuxrun /usr/bin/xfce4-panel --display :0' >[2] /tmp/panel.log &
+sleep 540
+echo panel-phase
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot-try1
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot-try2
+if(!test -e /debian/rootfs/tmp/shot2.xwd){
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot2.xwd' >[2] /tmp/xwd2.log &
+	sleep 600
+}
+echo shot-try3
+cp /debian/rootfs/tmp/shot2.xwd /debian/rootfs/shot2.xwd
+echo shot-ls
+ls -l /debian/rootfs/shot2.xwd
+echo ps
+ps
+echo log-xwd2
+grep -av 'invalid opcode' /tmp/xwd2.log | head -20
+echo log-desktop
+grep -av 'invalid opcode' /tmp/xfdesktop.log | tail -6
+echo log-panel
+grep -av 'invalid opcode' /tmp/panel.log | tail -6
+echo xfce-dp-done

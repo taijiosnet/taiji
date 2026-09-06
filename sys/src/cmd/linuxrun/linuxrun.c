@@ -580,6 +580,13 @@ sysrecvmsg(ulong fd, ulong mh)
 	if(m[2] < 0x10000)
 		return -Efault;
 	v = (struct Liovec*)m[2];
+	/* the kernel reports "no ancillary data and no special flags"
+	 * through these fields; leaving the caller's values in place
+	 * makes CMSG_FIRSTHDR walk stale stack as a cmsghdr - xcb then
+	 * copies a garbage fd-count into its fd array and dies of the
+	 * resulting wild pointers */
+	m[5] = 0;			/* msg_controllen */
+	((int*)m)[6] = 0;		/* msg_flags */
 	if(v[0].len == 0)
 		return 0;
 	return sockread((int)fd, v[0].base, v[0].len);
@@ -2512,6 +2519,8 @@ dosyscall(Ureg *ur)
 	case 386:	/* rseq */
 	case 65:	/* getgroups: root, no supplementary groups */
 	case 241:	/* sched_setaffinity */
+	case 208:	/* setresuid32: xterm's seteuid before spawning */
+	case 210:	/* setresgid32: xterm's setegid ditto */
 		r = 0;
 		break;
 	case 242:	/* sched_getaffinity: one cpu, mask filled in */
