@@ -50,6 +50,8 @@ enum {
 	/* big enough for a GTK program's arenas, fontconfig and
 	 * the pango worker-thread stacks */
 	Mapsize = 512*1024*1024,
+	Scratchva = 0x70000000,
+	Scratchsize = 96*1024*1024,
 	Stackbase = 0x60000000,
 	Stacksize = 128*1024,
 
@@ -189,6 +191,8 @@ int listenerfd = -1;	/* unused: accept polls a queue file now */
 int lisfds[8];		/* every bound listener fd (epoll gating) */
 int nlis;
 int inotifywd;		/* watch-descriptor counter for the inotify stub */
+void *forkscratch;	/* pre-attached RAM scratch for fork snapshots */
+int cloexecfd[1024/32];	/* guest FD_CLOEXEC marks */
 ulong sysring[32][4];	/* last syscalls: crash forensics */
 int sysri;
 
@@ -1624,28 +1628,26 @@ sysexecve(char *path, char **gargv)
 	for(i = 0; i < nguestsegs; i++)
 		segdetach((void*)guestsegs[i][0]);
 	nguestsegs = 0;
-	/* Linux programs mark their X sockets CLOEXEC: exec must not
-	 * leave bridge fds behind in helpers (xfwm4's dbus/at-spi
-	 * children inherited the X connection, raced reads with the
-	 * parent - stealing and duplicating replies - and their exit
-	 * closed the pipes under the window manager) */
+	/* Linux programs mark their X sockets CLOEXEC and expect exec
+	 * to drop them (xfwm4's dbus/at-spi children otherwise inherit
+	 * the connection and race reads with the parent); only the fds
+	 * the guest actually marked close, though - a blanket close
+	 * broke captures */
 	{
 		int q;
 
 		for(q = 0; q < NSOCK; q++){
 			if(!sockmap[q][1])
 				continue;
-			close(sockmap[q][2] >> 16);
-			close(sockmap[q][2] & 0xffff);
-			close(sockmap[q][0]);
-			sockmap[q][1] = 0;
-			sockmap[q][2] = 0;
-			sockmap[q][3] = 0;
+			if(cloexecfd[sockmap[q][0] >> 5] & (1 << (sockmap[q][0] & 31))){
+				close(sockmap[q][2] >> 16);
+				close(sockmap[q][2] & 0xffff);
+				close(sockmap[q][0]);
+				sockmap[q][1] = 0;
+				sockmap[q][2] = 0;
+				sockmap[q][3] = 0;
+			}
 		}
-		listenfd = -1;
-		nlis = 0;
-		boundpath[0] = 0;
-		connpath[0] = 0;
 	}
 	nph = 0;
 	nphhdrs = eh.phnum;
@@ -2619,6 +2621,15 @@ dosyscall(Ureg *ur)
 					sockmapfd(r, sockmap[i][2]);
 			}
 			break;
+		case 2:	/* SETFD: remember FD_CLOEXEC for exec */
+			if(a1 < 1024){
+				if(a3 & 1)
+					cloexecfd[a1 >> 5] |= 1 << (a1 & 31);
+				else
+					cloexecfd[a1 >> 5] &= ~(1 << (a1 & 31));
+			}
+			r = 0;
+			break;
 		case 3:	/* GETFL */
 			r = 2;
 			{
@@ -2917,11 +2928,12 @@ traphandler(void *v, char *msg)
 		*ur = forkregs;
 		if(forksnap){
 			int s, tfd;
-			ulong va, len, ulen, a;
+			ulong va, len, ulen, a, fastlen;
 			char snapname[64];
 			static uchar pg[Pgsz];
 
 			forksnap = 0;
+			fastlen = 0;
 			/* Copy the image through a scratch file, one page
 			 * at a time, skipping untouched (all-zero) pages:
 			 * fresh "memory" attachments come back zeroed, and
@@ -2929,38 +2941,65 @@ traphandler(void *v, char *msg)
 			 * available inside this note handler. */
 			snprint(snapname, sizeof snapname,
 				"/tmp/lrsnap.%d", getpid());
-			tfd = create(snapname, ORDWR|OTRUNC, 0600);
-			if(tfd < 0){
-				fprint(2, "linuxrun: fork snap create: %r\n");
-				exits("fork snapshot");
-			}
-			for(s = 0; s < nguestsegs; s++){
-				va = guestsegs[s][0];
-				len = ulen = guestsegs[s][1];
-				if(va == Mapbase)
-					ulen = mapbump - Mapbase;
-				for(a = 0; a < ulen; a += Pgsz){
-					ulong hdr[2];
-					uchar *pp;
-					int k, nz;
+			tfd = -1;
+			/* RAM scratch when the touched pages fit: the
+			 * ufs-backed /tmp costs tens of seconds per
+			 * 70MB GTK fork and stalls the whole session;
+			 * pages beyond the scratch spill to the file */
+			{
+				uchar *cur;
+				ulong fasttot;
 
-					pp = (uchar*)va + a;
-					nz = 0;
-					for(k = 0; k < Pgsz; k += sizeof(ulong))
-						if(*(ulong*)(pp+k) != 0){
-							nz = 1;
-							break;
+				cur = nil;
+				fasttot = 0;
+				if(forkscratch != nil){
+					cur = (uchar*)forkscratch;
+				}
+				for(s = 0; s < nguestsegs; s++){
+					va = guestsegs[s][0];
+					len = ulen = guestsegs[s][1];
+					if(va == Mapbase)
+						ulen = mapbump - Mapbase;
+					for(a = 0; a < ulen; a += Pgsz){
+						ulong hdr[2];
+						uchar *pp;
+						int k, nz;
+
+						pp = (uchar*)va + a;
+						nz = 0;
+						for(k = 0; k < Pgsz; k += sizeof(ulong))
+							if(*(ulong*)(pp+k) != 0){
+								nz = 1;
+								break;
+							}
+						if(!nz)
+							continue;
+						if(cur != nil && fasttot + 8 + Pgsz <= Scratchsize){
+							((ulong*)cur)[0] = (ulong)pp;
+							((ulong*)cur)[1] = Pgsz;
+							memmove(cur+8, pp, Pgsz);
+							cur += 8 + Pgsz;
+							fasttot += 8 + Pgsz;
+							continue;
 						}
-					if(!nz)
-						continue;
-					hdr[0] = (ulong)pp;
-					hdr[1] = Pgsz;
-					if(write(tfd, hdr, 8) != 8 ||
-					    write(tfd, pp, Pgsz) != Pgsz){
-						fprint(2, "linuxrun: fork snap write: %r\n");
-						exits("fork snapshot");
+						/* overflowed RAM: spill the rest to the file */
+						hdr[0] = (ulong)pp;
+						hdr[1] = Pgsz;
+						if(tfd < 0){
+							tfd = create(snapname, ORDWR|OTRUNC, 0600);
+							if(tfd < 0){
+								fprint(2, "linuxrun: fork snap create: %r\n");
+								exits("fork snapshot");
+							}
+						}
+						if(write(tfd, hdr, 8) != 8 ||
+						    write(tfd, pp, Pgsz) != Pgsz){
+							fprint(2, "linuxrun: fork snap write: %r\n");
+							exits("fork snapshot");
+						}
 					}
 				}
+				fastlen = fasttot;
 			}
 			for(s = 0; s < nguestsegs; s++){
 				va = guestsegs[s][0];
@@ -2971,22 +3010,33 @@ traphandler(void *v, char *msg)
 					exits("fork attach");
 				}
 			}
-			seek(tfd, 0, 0);
-			for(;;){
-				ulong hdr[2];
-				long n;
+			{
+				uchar *cur;
 
-				n = readn(tfd, hdr, 8);
-				if(n < 8)
-					break;
-				if(readn(tfd, pg, Pgsz) != Pgsz){
-					fprint(2, "linuxrun: fork snap read: %r\n");
-					exits("fork snapshot");
+				cur = (uchar*)forkscratch;
+				while(cur && cur < (uchar*)forkscratch + fastlen){
+					memmove((void*)((ulong*)cur)[0], cur+8, Pgsz);
+					cur += 8 + Pgsz;
 				}
-				memmove((void*)hdr[0], pg, Pgsz);
 			}
-			close(tfd);
-			remove(snapname);
+			if(tfd >= 0){
+				seek(tfd, 0, 0);
+				for(;;){
+					ulong hdr[2];
+					long n;
+
+					n = readn(tfd, hdr, 8);
+					if(n < 8)
+						break;
+					if(readn(tfd, pg, Pgsz) != Pgsz){
+						fprint(2, "linuxrun: fork snap read: %r\n");
+						exits("fork snapshot");
+					}
+					memmove((void*)hdr[0], pg, Pgsz);
+				}
+				close(tfd);
+				remove(snapname);
+			}
 		}
 		if(forkready[1] >= 0){
 			write(forkready[1], "x", 1);
@@ -3154,7 +3204,9 @@ main(int argc, char *argv[])
 
 	brkcur = Brkbase;
 	segat(Mapbase, Mapsize);
-	initsysinfo();
+	/* snapshots use the file path; the session mounts a
+	 * ramfs on /tmp so that path is RAM-fast */
+	forkscratch = nil;
 
 	stacktop = buildstack(argc, argv);
 	if(verbose)
