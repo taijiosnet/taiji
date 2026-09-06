@@ -74,3 +74,4 @@ debian/rootfs/lib/
 debian/rootfs/opt/
 debian/rootfs/root/README
 !debian/rootfs/root/README
+debian/rootfs/tmp/lrsnap.*

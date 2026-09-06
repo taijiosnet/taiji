@@ -937,12 +937,26 @@ int ropc[NSOCK][256];
 static void
 sockopc(int slot, void *buf, long n, int wr)
 {
-	static int npr;
-	int op;
+	static int npr, nseq;
+	int op, seq;
 
 	if(slot < 0 || n <= 0 || buf == nil)
 		return;
 	op = ((uchar*)buf)[0];
+	seq = ((uchar*)buf)[2] | (((uchar*)buf)[3]<<8);
+	/* sequence tracking: requests carry their seq at bytes 2-3,
+	 * replies and errors too (events do not - skip those) */
+	if(nseq < 150){
+		if(wr){
+			nseq++;
+			fprint(2, "linuxrun: SEQ g%d wr op=%d seq=%d n=%ld\n",
+				sockmap[slot][0], op, seq, n);
+		}else if(op <= 1){
+			nseq++;
+			fprint(2, "linuxrun: SEQ g%d rd op=%d seq=%d n=%ld\n",
+				sockmap[slot][0], op, seq, n);
+		}
+	}
 	if(wr)
 		wopc[slot][op]++;
 	else
@@ -1610,6 +1624,29 @@ sysexecve(char *path, char **gargv)
 	for(i = 0; i < nguestsegs; i++)
 		segdetach((void*)guestsegs[i][0]);
 	nguestsegs = 0;
+	/* Linux programs mark their X sockets CLOEXEC: exec must not
+	 * leave bridge fds behind in helpers (xfwm4's dbus/at-spi
+	 * children inherited the X connection, raced reads with the
+	 * parent - stealing and duplicating replies - and their exit
+	 * closed the pipes under the window manager) */
+	{
+		int q;
+
+		for(q = 0; q < NSOCK; q++){
+			if(!sockmap[q][1])
+				continue;
+			close(sockmap[q][2] >> 16);
+			close(sockmap[q][2] & 0xffff);
+			close(sockmap[q][0]);
+			sockmap[q][1] = 0;
+			sockmap[q][2] = 0;
+			sockmap[q][3] = 0;
+		}
+		listenfd = -1;
+		nlis = 0;
+		boundpath[0] = 0;
+		connpath[0] = 0;
+	}
 	nph = 0;
 	nphhdrs = eh.phnum;
 	dynamic = 0;

@@ -23,5 +23,7 @@ ls -l /debian/rootfs/shot1.xwd /debian/rootfs/shot2.xwd
 echo ps
 ps
 echo xfwm4-log
-sed -n '1,40p' /tmp/xfwm4.log
+sed -n '1,220p' /tmp/xfwm4.log
+echo xvfb-log
+sed -n '1,260p' /tmp/xvfb.log
 echo xfce-shot-done
