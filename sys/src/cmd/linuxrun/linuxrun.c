@@ -3038,6 +3038,27 @@ traphandler(void *v, char *msg)
 				remove(snapname);
 			}
 		}
+		/* every fork in this workload execs right away (xkbcomp,
+		 * dash, g_spawn helpers, xterm's shell); a child that
+		 * kept the parent's bridge descriptors raced reads on
+		 * the same pipes - stealing the parent's replies - and
+		 * its exit closed the pipes under the parent.  Close
+		 * the bridge in the child; CLOEXEC handling on exec
+		 * covers anything else. */
+		{
+			int q;
+
+			for(q = 0; q < NSOCK; q++){
+				if(!sockmap[q][1])
+					continue;
+				close(sockmap[q][2] >> 16);
+				close(sockmap[q][2] & 0xffff);
+				close(sockmap[q][0]);
+				sockmap[q][1] = 0;
+				sockmap[q][2] = 0;
+				sockmap[q][3] = 0;
+			}
+		}
 		if(forkready[1] >= 0){
 			write(forkready[1], "x", 1);
 			close(forkready[1]);
