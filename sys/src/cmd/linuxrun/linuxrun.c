@@ -1750,13 +1750,17 @@ dosyscall(Ureg *ur)
 	/* NB: writes through bridge sockets can block the whole
 	 * emulator when the pipe is full; with the X server mid-reply
 	 * and a client mid-write this deadlocks both (traced: xfwm4
-	 * freezes after its extension queries).  Two fixes were tried
-	 * and reverted: qlen-capped partial writes (a writer cannot
-	 * stat the opposite end's queue) and alarm-interrupted writes
-	 * (the alarm note wedges the nested syscall note handling).
-	 * The viable approach left: emulator-side output buffering per
-	 * socket with a flush driven by read-side readiness posted
-	 * over a control channel between the endpoint processes. */
+	 * freezes after its extension queries).  Three fixes were
+	 * built, tested and reverted: qlen-capped partial writes (a
+	 * writer cannot stat the opposite end's queue),
+	 * alarm-interrupted writes (the alarm note derails the nested
+	 * syscall-note handling), and per-socket output buffering
+	 * flushed at the wait loops (the flush write itself blocks,
+	 * and server and client mid-flush wedge each other exactly as
+	 * before - plan9 pipes offer no nonblocking write at all).
+	 * The remaining honest fix is to move the bridge transport
+	 * off pipes entirely: a shared-memory ring that both endpoint
+	 * processes can poll and drain without ever blocking. */
 	case 4:		/* write */
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
