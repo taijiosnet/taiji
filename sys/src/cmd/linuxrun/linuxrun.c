@@ -1747,6 +1747,16 @@ dosyscall(Ureg *ur)
 		if(r < 0 && r != -11)	/* keep EAGAIN */
 			r = -Ebadf;
 		break;
+	/* NB: writes through bridge sockets can block the whole
+	 * emulator when the pipe is full; with the X server mid-reply
+	 * and a client mid-write this deadlocks both (traced: xfwm4
+	 * freezes after its extension queries).  Two fixes were tried
+	 * and reverted: qlen-capped partial writes (a writer cannot
+	 * stat the opposite end's queue) and alarm-interrupted writes
+	 * (the alarm note wedges the nested syscall note handling).
+	 * The viable approach left: emulator-side output buffering per
+	 * socket with a flush driven by read-side readiness posted
+	 * over a control channel between the endpoint processes. */
 	case 4:		/* write */
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
