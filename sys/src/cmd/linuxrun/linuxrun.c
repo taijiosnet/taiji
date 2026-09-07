@@ -1425,7 +1425,7 @@ listenqueued(void)
 {
 	char buf[4096];
 	char *p, *q;
-	int fd, n, i, cpid;
+	int fd, n, i, cpid, found;
 
 	if(nlis == 0)
 		return 0;
@@ -1436,15 +1436,24 @@ listenqueued(void)
 	close(fd);
 	if(n <= 0)
 		return 0;
+	found = -1;
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
 		cpid = strtol(p+4, &q, 10);
 		if(cpid <= 0 || q[0] != '.' || q[1] != 'a')
 			continue;
+		found = cpid;
 		for(i = 0; i < nserved; i++)
 			if(servedpids[i] == cpid)
 				goto nextq;
 		return 1;
 	nextq: ;
+	}
+	{
+		static int z;
+
+		if(z++ < 40)
+			fprint(2, "linuxrun: GATE p%d n=%d found=%d nserved=%d nlis=%d\n",
+				getpid(), n, found, nserved, nlis);
 	}
 	return 0;
 }
@@ -2218,6 +2227,13 @@ dosyscall(Ureg *ur)
 				r = -Enomem;
 				break;
 			}
+			{
+				static int z;
+
+				if(z++ < 20)
+					fprint(2, "linuxrun: ECTL p%d epfd=%d op=%lux fd=%d\n",
+						getpid(), (int)a1, a2, (int)a3);
+			}
 			eptab[slot].epfd = (int)a1;
 			eptab[slot].fd = (int)a3;
 			if(a4 != 0){
@@ -2245,8 +2261,16 @@ dosyscall(Ureg *ur)
 				 * unserved connection is queued; reporting
 				 * it otherwise makes the server spin in
 				 * failing accepts */
-				if(islistener((int)eptab[i].fd) && !listenqueued())
-					continue;
+				if(islistener((int)eptab[i].fd)){
+					if(!listenqueued()){
+						static int z;
+
+						if(z++ < 30)
+							fprint(2, "linuxrun: WSKIP p%d lfd=%d not queued\n",
+								getpid(), (int)eptab[i].fd);
+						continue;
+					}
+				}
 				/* connected bridge sockets: EPOLLIN only
 				 * when the pipe holds data, else the
 				 * server reads before the client has sent
