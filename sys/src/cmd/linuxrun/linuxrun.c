@@ -554,6 +554,24 @@ static int sockwritefd(int);
 static long syswritev(ulong, ulong, ulong);
 static long sockread(int, void*, ulong);
 static void sockpredrain(void);
+/* plan9 notes (the handled closed-pipe one among them) interrupt a
+ * blocked write; POSIX expects the syscall retried, but an error
+ * return made libxtrans abandon half-written replies - the client
+ * then waits forever for the rest of a big reply */
+static long
+sockwr(int fd, void *buf, long n)
+{
+	long w;
+	char es[ERRMAX];
+
+	while((w = write(fd, buf, n)) < 0){
+		errstr(es, sizeof es);
+		if(strcmp(es, "interrupted") == 0)
+			continue;
+		return -1;
+	}
+	return w;
+}
 static void sockopc(int, void*, long, int);
 static void dumpopc(void);
 static int sockslot(int);
@@ -623,7 +641,7 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 	for(i = 0; i < cnt; i++){
 		if(v[i].len == 0)
 			continue;
-		n = write((int)fd, v[i].base, v[i].len);
+		n = sockwr((int)fd, v[i].base, v[i].len);
 		if(n < 0)
 			return -Ebadf;
 	}
@@ -1026,12 +1044,12 @@ sockopc(int slot, void *buf, long n, int wr)
 	if(nseq < 150){
 		if(wr){
 			nseq++;
-			fprint(2, "linuxrun: SEQ g%d wr op=%d seq=%d n=%ld\n",
-				sockmap[slot][0], op, seq, n);
-		}else if(op <= 1){
+			fprint(2, "linuxrun: SEQ p%d g%d wr op=%d seq=%d n=%ld\n",
+				getpid(), sockmap[slot][0], op, seq, n);
+		}else if(op <= 1 || (wr == 0 && n <= 2600)){
 			nseq++;
-			fprint(2, "linuxrun: SEQ g%d rd op=%d seq=%d n=%ld\n",
-				sockmap[slot][0], op, seq, n);
+			fprint(2, "linuxrun: SEQ p%d g%d rd op=%d seq=%d n=%ld\n",
+				getpid(), sockmap[slot][0], op, seq, n);
 		}
 	}
 	if(wr)
@@ -1577,7 +1595,7 @@ dosocketcall(ulong subop, ulong argsp)
 	case 11:	/* sendto(fd,a1,a2,a3,a4) */
 		if(sockslot((int)a[0]) >= 0)
 			sockpredrain();
-		r = write(sockwritefd((int)a[0]), (void*)a[1], a[2]);
+		r = sockwr(sockwritefd((int)a[0]), (void*)a[1], a[2]);
 		if(r > 0)
 			sockopc(sockslot((int)a[0]), (void*)a[1], r, 1);
 		if(r < 0)
@@ -1813,8 +1831,8 @@ dosyscall(Ureg *ur)
 					b += ropc[si][sk];
 				}
 				if(a || b)
-					fprint(2, "linuxrun: FLOW g%d wr=%d rd=%d lastsys=%lux inq=%lud pipe=%lud\n",
-						sockmap[si][0], a, b,
+					fprint(2, "linuxrun: FLOW p%d g%d wr=%d rd=%d lastsys=%lux inq=%lud pipe=%lud\n",
+						getpid(), sockmap[si][0], a, b,
 						sysri ? sysring[(sysri-1)%32][0] : 0,
 						inqn[si], sockrawqlen(si));
 			}
@@ -1855,7 +1873,7 @@ dosyscall(Ureg *ur)
 	case 4:		/* write */
 		if(sockslot((int)a1) >= 0)
 			sockpredrain();
-		r = write(sockwritefd((int)a1), (void*)a2, a3);
+		r = sockwr(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
@@ -2471,7 +2489,7 @@ dosyscall(Ureg *ur)
 	case 369:	/* sendto (direct) */
 		if(sockslot((int)a1) >= 0)
 			sockpredrain();
-		r = write(sockwritefd((int)a1), (void*)a2, a3);
+		r = sockwr(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
