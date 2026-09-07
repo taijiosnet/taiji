@@ -2485,6 +2485,13 @@ dosyscall(Ureg *ur)
 			else
 				r = ns;
 		}
+		{
+			static int z;
+
+			if(z++ < 12)
+				fprint(2, "linuxrun: ACC4 p%d -> %lux (err=%lux)\n",
+					getpid(), (ulong)r, r < 0 ? -r : 0);
+		}
 		break;
 	case 369:	/* sendto (direct) */
 		if(sockslot((int)a1) >= 0)
