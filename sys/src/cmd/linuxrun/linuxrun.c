@@ -553,6 +553,7 @@ static int sockreadfd(int);
 static int sockwritefd(int);
 static long syswritev(ulong, ulong, ulong);
 static long sockread(int, void*, ulong);
+static void sockpredrain(void);
 static void sockopc(int, void*, long, int);
 static void dumpopc(void);
 static int sockslot(int);
@@ -611,6 +612,8 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 
 	v = (struct Liovec*)iov;
 	slot = sockslot((int)fd);
+	if(slot >= 0)
+		sockpredrain();
 	fd = sockwritefd((int)fd);
 	if(cnt > 0 && v[0].len > 0)
 		sockopc(slot, v[0].base, v[0].len, 1);
@@ -639,14 +642,15 @@ sysreadv(ulong fd, ulong iov, ulong cnt)
 	if(slot >= 0 && sockmap[slot][3] && sockinready((int)fd) <= 0)
 		return -11;		/* -EAGAIN */
 	v = (struct Liovec*)iov;
-	fd = sockreadfd((int)fd);
 	total = 0;
 	for(i = 0; i < cnt; i++){
 		if(v[i].len == 0)
 			continue;
-		n = read((int)fd, v[i].base, v[i].len);
+		/* through sockread so buffered (pre-drained) data is
+		 * served first */
+		n = sockread((int)fd, v[i].base, v[i].len);
 		if(n < 0)
-			return -Ebadf;
+			return n;
 		total += n;
 		if(n < (long)v[i].len)
 			break;
@@ -933,6 +937,75 @@ initsysinfo(void)
  * poll() and recv() unchanged. */
 #define NSOCK 16
 int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
+/* Receive-side buffering: every guest write to a bridge socket first
+ * drains the process's own readable pipes into these buffers, so a
+ * peer blocked on a full pipe always completes - the two-pipe X
+ * deadlock cannot form, and plan9 needs no nonblocking write. */
+uchar *inq[NSOCK];
+int soeof[NSOCK];	/* peer closed its end (read gave EOF) */
+ulong inqn[NSOCK], inqcap[NSOCK];
+
+static ulong
+sockrawqlen(int i)
+{
+	Dir *d;
+	ulong q;
+
+	q = 0;
+	if((d = dirfstat(sockmap[i][2] >> 16)) != nil){
+		q = d->length;
+		free(d);
+	}
+	return q;
+}
+
+static void
+sockdrain(int i)
+{
+	ulong got, q, chunk;
+	long n;
+
+	got = 0;
+	while(got < 1024*1024){
+		q = sockrawqlen(i);
+		if(q == 0)
+			break;
+		chunk = q > 16384 ? 16384 : q;
+		if(inqn[i] + chunk > inqcap[i]){
+			ulong nc;
+			uchar *nq;
+
+			nc = inqcap[i] ? inqcap[i] : 4096;
+			while(nc < inqn[i] + chunk)
+				nc *= 2;
+			nq = malloc(nc);
+			if(nq == nil)
+				return;
+			if(inqn[i])
+				memmove(nq, inq[i], inqn[i]);
+			free(inq[i]);
+			inq[i] = nq;
+			inqcap[i] = nc;
+		}
+		n = read(sockmap[i][2] >> 16, inq[i] + inqn[i], chunk);
+		if(n <= 0)
+			break;
+		inqn[i] += n;
+		got += n;
+	}
+}
+
+/* drain every readable bridge pipe: called before a guest write can
+ * block, so the peer's stuck write always finds room */
+static void
+sockpredrain(void)
+{
+	int i;
+
+	for(i = 0; i < NSOCK; i++)
+		if(sockmap[i][1] && sockrawqlen(i) > 0)
+			sockdrain(i);
+}
 /* X-protocol forensics: first byte of every write (request opcode) and
  * read (event/reply type) through a bridge socket, counted per slot */
 int wopc[NSOCK][256];
@@ -1113,11 +1186,23 @@ sockread(int gfd, void *buf, ulong n)
 	int i;
 
 	i = sockslot(gfd);
+	if(i >= 0 && inqn[i] > 0){
+		ulong b;
+
+		b = n < (long)inqn[i] ? n : inqn[i];
+		memmove(buf, inq[i], b);
+		memmove(inq[i], inq[i]+b, inqn[i]-b);
+		inqn[i] -= b;
+		sockopc(i, buf, b, 0);
+		return b;
+	}
 	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0)
 		return -11;		/* -EAGAIN */
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
 		sockopc(sockslot(gfd), buf, i, 0);
+	if(i == 0 && sockslot(gfd) >= 0)
+		soeof[sockslot(gfd)] = 1;	/* peer closed */
 	return i;
 }
 
@@ -1358,6 +1443,8 @@ sockinready(int fd)
 	i = sockslot(fd);
 	if(i < 0 || sockmap[i][2] == 0)
 		return -1;		/* not a connected socket */
+	if(inqn[i] > 0)
+		return 1;
 	rdy = 0;
 	if((d = dirfstat(sockmap[i][2] >> 16)) != nil){
 		rdy = d->length;
@@ -1488,6 +1575,8 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 9:		/* send(fd,a1=buf,a2=len) */
 	case 11:	/* sendto(fd,a1,a2,a3,a4) */
+		if(sockslot((int)a[0]) >= 0)
+			sockpredrain();
 		r = write(sockwritefd((int)a[0]), (void*)a[1], a[2]);
 		if(r > 0)
 			sockopc(sockslot((int)a[0]), (void*)a[1], r, 1);
@@ -1724,8 +1813,10 @@ dosyscall(Ureg *ur)
 					b += ropc[si][sk];
 				}
 				if(a || b)
-					fprint(2, "linuxrun: FLOW g%d wr=%d rd=%d\n",
-						sockmap[si][0], a, b);
+					fprint(2, "linuxrun: FLOW g%d wr=%d rd=%d lastsys=%lux inq=%lud pipe=%lud\n",
+						sockmap[si][0], a, b,
+						sysri ? sysring[(sysri-1)%32][0] : 0,
+						inqn[si], sockrawqlen(si));
 			}
 		}
 	}
@@ -1762,6 +1853,8 @@ dosyscall(Ureg *ur)
 	 * off pipes entirely: a shared-memory ring that both endpoint
 	 * processes can poll and drain without ever blocking. */
 	case 4:		/* write */
+		if(sockslot((int)a1) >= 0)
+			sockpredrain();
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
@@ -1803,6 +1896,10 @@ dosyscall(Ureg *ur)
 				close(sockmap[i][2] >> 16);
 				close(sockmap[i][2] & 0xffff);
 				sockmap[i][1] = 0;
+				free(inq[i]);
+				inq[i] = nil;
+				inqn[i] = 0;
+				inqcap[i] = 0;
 			}else if(a1 >= 0x10000UL){
 				close((int)(a1 >> 16));
 				close((int)(a1 & 0xffff));
@@ -2372,6 +2469,8 @@ dosyscall(Ureg *ur)
 		}
 		break;
 	case 369:	/* sendto (direct) */
+		if(sockslot((int)a1) >= 0)
+			sockpredrain();
 		r = write(sockwritefd((int)a1), (void*)a2, a3);
 		if(r > 0)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
@@ -2413,11 +2512,19 @@ dosyscall(Ureg *ur)
 					ev = pf[k].events;
 					re = 0;
 					if(sockslot(pf[k].fd) >= 0){
-						if(sockmap[sockslot(pf[k].fd)][2] != 0){
+						int q;
+
+						q = sockslot(pf[k].fd);
+						if(sockmap[q][2] != 0){
 							if(ev & 0x4)		/* POLLOUT */
 								re |= 0x4;
 							if((ev & 0x1) && sockinready(pf[k].fd) > 0)
 								re |= 0x1;	/* POLLIN */
+							if(soeof[q])
+								re |= 0x11;	/* POLLHUP|POLLIN:
+										 * the peer closed -
+										 * silence here hung
+										 * xcb forever */
 						}else if((ev & 0x1) && listenqueued())
 							re |= 0x1;	/* the listener */
 					}else
