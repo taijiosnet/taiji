@@ -1839,11 +1839,24 @@ dosyscall(Ureg *ur)
 					a += wopc[si][sk];
 					b += ropc[si][sk];
 				}
-				if(a || b)
+				if(a || b){
+					int q;
+					int bsys;
+
 					fprint(2, "linuxrun: FLOW p%d g%d wr=%d rd=%d lastsys=%lux inq=%lud pipe=%lud\n",
 						getpid(), sockmap[si][0], a, b,
 						sysri ? sysring[(sysri-1)%32][0] : 0,
 						inqn[si], sockrawqlen(si));
+					fprint(2, "linuxrun: TAIL p%d", getpid());
+					for(q = 6; q > 0; q--){
+						if(sysri > q)
+							bsys = sysring[(sysri-q)%32][0];
+						else
+							continue;
+						fprint(2, " %lux", bsys);
+					}
+					fprint(2, "\n");
+				}
 			}
 		}
 	}
