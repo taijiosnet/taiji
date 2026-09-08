@@ -2093,10 +2093,19 @@ dosyscall(Ureg *ur)
 		r = syswritev(a1, a2, a3);
 		break;
 	case 76:	/* getrlimit */
-	case 191:	/* ugetrlimit: fill in an infinite rlimit */
+	case 191:	/* ugetrlimit: fill in an infinite rlimit - except
+			 * RLIMIT_STACK (resource 3): glibc derives the
+			 * default pthread stack size from it, an infinite
+			 * limit made pthread_create ask for a 2GB stack
+			 * and abort pango's FcInit worker */
 		if(a2 != 0){
-			*(ulong*)a2 = 0x7fffffff;
-			*(ulong*)(a2+4) = 0x7fffffff;
+			if(a1 == 3){
+				*(ulong*)a2 = 8*1024*1024;
+				*(ulong*)(a2+4) = 8*1024*1024;
+			}else{
+				*(ulong*)a2 = 0x7fffffff;
+				*(ulong*)(a2+4) = 0x7fffffff;
+			}
 		}
 		r = 0;
 		break;
@@ -2336,6 +2345,11 @@ dosyscall(Ureg *ur)
 		{
 			int pid, mfd;
 			void (*starter)(void);
+			static int zc;
+
+			if(zc++ < 30)
+				fprint(2, "linuxrun: CLONE p%d nr=%lux flags=%lux sp=%lux tls=%lux ctid=%lux\n",
+					getpid(), nr, a1, a2, a4, a5);
 
 			if(pipe(forkready) < 0){
 				fprint(2, "linuxrun: fork pipe: %r\n");
@@ -3014,6 +3028,20 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
+	}
+	if(r == -11){
+		static int z;
+
+		if(z++ < 60)
+			fprint(2, "linuxrun: E11 p%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
+				getpid(), nr, a1, a2, a3);
+	}
+	if(nr == 192 || nr == 90){
+		static int zm;
+
+		if(zm++ < 500)
+			fprint(2, "linuxrun: MAP p%d nr=%lux addr=%lux len=%lux -> %ld (bump=%lux)\n",
+				getpid(), nr, a1, a2, r, mapbump);
 	}
 	if(verbose)
 		fprint(2, "linuxrun: sys %lux -> %ld\n", nr, r);
