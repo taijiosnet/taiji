@@ -1209,13 +1209,18 @@ sockwritefd(int fd)
 
 /* the alarm note guards the 1-byte EOF probe below.  If the note
  * lands between alarm(1) and the read entering the kernel, the read
- * would block forever on a live writer - so re-arm: a second note
- * interrupts even that late-blocked read */
+ * would block forever on a live writer - so re-arm while a probe is
+ * in flight: a second note interrupts even that late-blocked read.
+ * Re-arming unconditionally would storm: every re-arm fires again
+ * one millisecond later, forever. */
+static int probing;
+
 static int
 alarmnote(void *v, char *msg)
 {
 	if(msg != nil && strcmp(msg, "alarm") == 0){
-		alarm(1);
+		if(probing)
+			alarm(1);
 		return 1;
 	}
 	return 0;
@@ -1268,9 +1273,11 @@ sockread(int gfd, void *buf, ulong n)
 			areg = 1;
 			atnotify(alarmnote, 1);
 		}
+		probing = 1;
 		alarm(1);
 		rr = read(sockreadfd(gfd), &probe, 1);
 		alarm(0);
+		probing = 0;
 		if(rr == 1){
 			/* the probe byte is real data: serve it first */
 			inq[i][0] = probe;
