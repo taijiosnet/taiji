@@ -2153,6 +2153,15 @@ dosyscall(Ureg *ur)
 	case 258:	/* set_tid_address */
 		r = getpid();
 		break;
+	case 266:	/* clock_getres(clk_id, &res): 1ns resolution */
+		if(a2 < 0x10000)
+			r = -Efault;
+		else{
+			*(ulong*)a2 = 0;
+			*(ulong*)(a2+4) = 1;
+			r = 0;
+		}
+		break;
 	case 265:	/* clock_gettime */
 		{
 			vlong t;
@@ -2197,8 +2206,6 @@ dosyscall(Ureg *ur)
 		break;
 	case 255:	/* epoll_ctl_old */
 	case 324:	/* kept: some builds route ctl here */
-	case 266:	/* observed epoll_ctl variant (a1=epfd a2=op a3=fd) */
-	case 406:	/* observed epoll_ctl variant */
 		{
 			int i, slot;
 
@@ -2231,8 +2238,8 @@ dosyscall(Ureg *ur)
 				static int z;
 
 				if(z++ < 20)
-					fprint(2, "linuxrun: ECTL p%d epfd=%d op=%lux fd=%d\n",
-						getpid(), (int)a1, a2, (int)a3);
+					fprint(2, "linuxrun: ECTL p%d nr=%lux epfd=%d op=%lux fd=%d\n",
+						getpid(), nr, (int)a1, a2, (int)a3);
 			}
 			eptab[slot].epfd = (int)a1;
 			eptab[slot].fd = (int)a3;
@@ -2890,6 +2897,25 @@ dosyscall(Ureg *ur)
 				r = p[0];
 			}
 		}
+		break;
+	case 406:	/* clock_nanosleep_time64(clk, flags, req64, rem64):
+			 * glibc's nanosleep on modern i386 - ENOSYS here
+			 * aborted pango's FcInit thread and took the
+			 * window manager down with it; the request is the
+			 * THIRD argument */
+		{
+			ulong ms;
+
+			ms = 1;
+			if(a3 >= 0x10000 && a3 < 0x80000000){
+				ms = ((ulong*)a3)[0]*1000 +
+					(((ulong*)a3)[1])/1000000;
+				if(ms > 1000)
+					ms = 1000;
+			}
+			sleep(ms ? ms : 1);
+		}
+		r = 0;
 		break;
 	case 403:	/* clock_gettime64 */
 	case 408:	/* clock_gettime64 alias used by some stubs */
