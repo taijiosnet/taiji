@@ -3111,6 +3111,16 @@ traphandler(void *v, char *msg)
 		 * pipe and cannot touch the shared segments) */
 		forkpending = 0;
 		*ur = forkregs;
+		/* release the parent BEFORE the snapshot: detaching and
+		 * reattaching touches only this child's mappings, and
+		 * every fork here execs (which discards the copy), so
+		 * a 60MB trickle through the ufs /tmp must not park
+		 * the X server for the whole session */
+		if(forkready[1] >= 0){
+			write(forkready[1], "x", 1);
+			close(forkready[1]);
+			forkready[1] = -1;
+		}
 		if(forksnap){
 			int s, tfd;
 			void *scratchseg;
@@ -3259,17 +3269,6 @@ traphandler(void *v, char *msg)
 				sockmap[q][2] = 0;
 				sockmap[q][3] = 0;
 			}
-		}
-		if(forkready[1] >= 0){
-			{
-				static int z;
-
-				if(z++ < 10)
-					fprint(2, "linuxrun: FPOST p%d posting forkready\n", getpid());
-			}
-			write(forkready[1], "x", 1);
-			close(forkready[1]);
-			forkready[1] = -1;
 		}
 		return 1;
 	}
