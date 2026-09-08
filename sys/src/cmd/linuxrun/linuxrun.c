@@ -228,6 +228,10 @@ char *genv[] = {
 	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
 	"HOME=/root",
 	"DISPLAY=:0",
+	/* xfwm4 without xfconf shows a startup-failure helper dialog
+	 * whose paint stalls under the emulator - give every guest the
+	 * session bus launched by the run script instead */
+	"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-1",
 	/* GTK3 X11 probes GLX for every window; under the emulator the
 	 * probe's GL teardown retries forever, so skip client GL here */
 	"GDK_GL=disable",
