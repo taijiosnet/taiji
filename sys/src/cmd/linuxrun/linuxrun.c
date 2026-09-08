@@ -228,6 +228,9 @@ char *genv[] = {
 	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
 	"HOME=/root",
 	"DISPLAY=:0",
+	/* GTK3 X11 probes GLX for every window; under the emulator the
+	 * probe's GL teardown retries forever, so skip client GL here */
+	"GDK_GL=disable",
 	nil,};
 
 /* epoll: a table of registered fds per epoll fd; wait reports every
