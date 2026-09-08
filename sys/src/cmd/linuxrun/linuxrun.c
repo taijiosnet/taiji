@@ -2430,20 +2430,13 @@ dosyscall(Ureg *ur)
 				}
 				n++;
 			}
-			if(n == 0){
-				/* yield only after a burst of empty polls:
-				 * the server's scheduler pokes
-				 * epoll_wait(0) in a tight loop and a
-				 * yield on every poll distorts its timing */
-				static int nempty;
-
-				if(++nempty >= 64){
-					nempty = 0;
-					if(a4 > 50)
-						sleep(50);
-					else
-						sleep(a4 > 0 ? a4 : 1);
-				}
+			if(n == 0 && a4 > 0){
+				/* a real timeout means the caller expects to
+				 * wait: honor it (capped) instead of spinning -
+				 * Xorg's epoll_wait+clock_gettime64 loop ran
+				 * flat out otherwise.  timeout-0 callers keep
+				 * getting an immediate empty return. */
+				sleep(a4 > 50 ? 50 : a4);
 			}
 			r = n;
 		}
@@ -3056,18 +3049,25 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
-	case 406:	/* clock_nanosleep_time64(clk, flags, req64, rem64):
-			 * glibc's nanosleep on modern i386 - ENOSYS here
-			 * aborted pango's FcInit thread and took the
-			 * window manager down with it; the request is the
-			 * THIRD argument */
+		case 406:	/* clock_nanosleep_time64(clk, flags, req64, rem64):
+				 * glibc's nanosleep on modern i386 - ENOSYS here
+				 * aborted pango's FcInit thread and took the
+				 * window manager down with it; the request is the
+				 * THIRD argument, and its fields are 64-bit
+				 * ([0]/[1] as ulongs are sec.lo/sec.hi - reading
+				 * [1] as nanoseconds collapsed every sleep to
+				 * ~1ms and spun glib's timer loops flat out) */
 		{
 			ulong ms;
+			vlong sec;
+			vlong nsc;
 
+			sec = *(vlong*)((uchar*)a3);
+			nsc = *(vlong*)((uchar*)a3+8);
 			ms = 1;
-			if(a3 >= 0x10000 && a3 < 0x80000000){
-				ms = ((ulong*)a3)[0]*1000 +
-					(((ulong*)a3)[1])/1000000;
+			if(a3 >= 0x10000 && a3 < 0x80000000 &&
+			   sec >= 0 && sec < 100000 && nsc >= 0){
+				ms = sec*1000 + nsc/1000000;
 				if(ms > 1000)
 					ms = 1000;
 			}
