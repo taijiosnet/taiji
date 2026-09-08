@@ -1977,8 +1977,18 @@ dosyscall(Ureg *ur)
 		r = 0;
 		break;
 	case 20:	/* getpid: stable across clone threads (see guestprocid) */
-		if(guestprocid == 0)
+		if(guestprocid == 0){
 			guestprocid = getpid();
+			fprint(2, "linuxrun: PIDINIT-LAZY p%d guest=%lux\n",
+				getpid(), guestprocid);
+		}
+		if(guestprocid == 106){
+			static int zw;
+
+			if(zw++ < 10)
+				fprint(2, "linuxrun: WHO106 p%d guest=%lux first=%d\n",
+					getpid(), guestprocid, started);
+		}
 		r = guestprocid;
 		break;
 	case 224:	/* gettid: unique per thread == our host pid */
@@ -2418,11 +2428,14 @@ dosyscall(Ureg *ur)
 				forksnap = !(nr == 120 && (a1 & LcVmnul));
 				if(!forksnap && a2 != 0)
 					ur->sp = a2;	/* thread switch stack */
-				if(forksnap)
+				if(forksnap){
 					/* fresh guest process: adopt the new
 					 * host pid (CLONE_VM threads keep
 					 * the parent's guestprocid copy) */
 					guestprocid = getpid();
+					fprint(2, "linuxrun: FORKPID p%d guest=%lux\n",
+						getpid(), guestprocid);
+				}
 				if(nr == 120 && a4 != 0){
 					long rr;
 
@@ -3101,6 +3114,7 @@ dosyscall(Ureg *ur)
 
 		if(zg++ < 300){
 			int q, ok;
+			ulong bp, nexp;
 
 			ok = 0;
 			for(q = 0; q < nguestsegs; q++)
@@ -3118,6 +3132,28 @@ dosyscall(Ureg *ur)
 			for(q = 4; q < 68; q += 4)
 				fprint(2, " %lux", ((ulong*)ur->sp)[q/4]);
 			fprint(2, "\n");
+			/* ebp-chain walk: [bp] = saved ebp, [bp+4] = ret */
+			nexp = 0;
+			for(bp = ur->bp; nexp < 10; nexp++){
+				int gok;
+
+				if(bp < 0x40000000 || bp > 0x70000000 || bp & 3)
+					break;
+				gok = 0;
+				for(q = 0; q < nguestsegs; q++)
+					if(guestsegs[q][0] <= bp &&
+					   bp+8 <= guestsegs[q][0]+guestsegs[q][1]){
+						gok = 1;
+						break;
+					}
+				if(!gok)
+					break;
+				fprint(2, "linuxrun: BPWALK p%d bp=%lux ret=%lux\n",
+					getpid(), bp, *(ulong*)(bp+4));
+				bp = *(ulong*)bp;
+				if(bp == 0 || bp == (ulong)-1)
+					break;
+			}
 		}
 	}
 	if(nr == 192 || nr == 90){
@@ -3176,6 +3212,8 @@ traphandler(void *v, char *msg)
 		if(!started){
 			started = 1;
 			guestprocid = getpid();
+			fprint(2, "linuxrun: PIDINIT-SYS p%d guest=%lux\n",
+				getpid(), guestprocid);
 			ur->pc = entrypc;
 			ur->sp = stacktop;
 			ur->ax = 0;
@@ -3233,6 +3271,8 @@ traphandler(void *v, char *msg)
 	if(!started){
 		started = 1;
 		guestprocid = getpid();
+		fprint(2, "linuxrun: PIDINIT-UD2 p%d guest=%lux\n",
+			getpid(), guestprocid);
 		ur->pc = entrypc;
 		ur->sp = stacktop;
 		ur->ax = 0;
