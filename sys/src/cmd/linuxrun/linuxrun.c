@@ -1207,13 +1207,29 @@ sockwritefd(int fd)
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
+/* the alarm note only guards the 1-byte EOF probe below: handled
+ * means the interrupted read returns -1 and the caller sees EAGAIN */
+static int
+alarmnote(void *v, char *msg)
+{
+	if(msg != nil && strcmp(msg, "alarm") == 0)
+		return 1;
+	return 0;
+}
+
 /* read through a bridge socket, honoring the guest's O_NONBLOCK:
  * an empty pipe must give EAGAIN immediately or XCB's nonblocking
- * recv wedges the connection forever */
+ * recv wedges the connection forever - but an empty pipe whose
+ * writer is gone must report EOF (0), or a dropped connection
+ * looks like "no data yet" forever and the client spins on
+ * recvmsg-EAGAIN.  A nonblocking stat cannot see the far end, so
+ * an empty-and-closed pipe is probed with a 1-byte read under a
+ * 1ms alarm: interrupted means a live writer (EAGAIN), 0 means EOF */
 static long
 sockread(int gfd, void *buf, ulong n)
 {
-	int i;
+	int i, slot;
+	ulong b;
 
 	i = sockslot(gfd);
 	if(i >= 0 && inqn[i] > 0){
@@ -1226,8 +1242,37 @@ sockread(int gfd, void *buf, ulong n)
 		sockopc(i, buf, b, 0);
 		return b;
 	}
-	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0)
-		return -11;		/* -EAGAIN */
+	slot = i;
+	if(i >= 0 && soeof[i])
+		return 0;
+	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0){
+		static int areg;
+		char probe;
+		long rr;
+
+		if(!areg){
+			areg = 1;
+			atnotify(alarmnote, 1);
+		}
+		alarm(1);
+		rr = read(sockreadfd(gfd), &probe, 1);
+		alarm(0);
+		if(rr == 1){
+			/* the probe byte is real data: serve it first */
+			inq[i][0] = probe;
+			inqn[i] = 1;
+			b = n < 1 ? n : 1;
+			memmove(buf, inq[i], b);
+			inqn[i] -= b;
+			sockopc(i, buf, b, 0);
+			return b;
+		}
+		if(rr == 0){
+			soeof[i] = 1;		/* peer closed: EOF, not EAGAIN */
+			return 0;
+		}
+		return -11;			/* interrupted: writer alive */
+	}
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
 		sockopc(sockslot(gfd), buf, i, 0);
