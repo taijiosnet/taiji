@@ -25,5 +25,5 @@ ps
 echo xfwm4-log
 sed -n '1,220p' /tmp/xfwm4.log
 echo xvfb-log
-sed -n '1,260p' /tmp/xvfb.log
+cat /tmp/xvfb.log
 echo xfce-shot-done
