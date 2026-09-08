@@ -1293,6 +1293,11 @@ static int sscanf3(char*, int*, int*, int*);
 static int sscanf2(char*, char*, int, char*, int);
 static int traphandler(void*, char*);
 
+/* per-client connection counter: a second XOpenDisplay from the same
+ * pid (glvnd/mesa opens one, at-spi another) must queue a second
+ * ticket, not overwrite the first */
+static int connseq;
+
 static long
 sysconnect(ulong path)
 {
@@ -1314,14 +1319,15 @@ sysconnect(ulong path)
 		return -Enomem;
 	/* server reads what we write: publish c2s[0]; it writes back on
 	 * s2c[1].  We keep c2s[1] (write) and s2c[0] (read). */
-	snprint(target, sizeof target, "/srv/x.c.%d.a", getpid());
+	snprint(target, sizeof target, "/srv/x.c.%d.%d.a", getpid(), connseq);
 	if(postsrvfd(target, c2s[0]) < 0)
 		return -Enomem;
-	snprint(target, sizeof target, "/srv/x.c.%d.b", getpid());
+	snprint(target, sizeof target, "/srv/x.c.%d.%d.b", getpid(), connseq);
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
+	connseq++;
 	/* the two /srv posts ARE the queue: the (nonblocking)
-	 * accept scans /srv for pending x.c.<pid>.a entries */
+	 * accept scans /srv for pending x.c.<pid>.<seq>.a entries */
 	strncpy(connpath, (char*)path, sizeof connpath - 1);
 	connpath[sizeof connpath - 1] = 0;
 	return (s2c[0]<<16) | c2s[1];
@@ -1375,14 +1381,12 @@ sscanf2(char *s, char *a, int na, char *b, int nb)
 	return (a[0] && b[0]) ? 2 : 0;
 }
 
-static int servedpids[32];
-static int nserved;
 
 static long
 sysaccept(void)
 {
 	char buf[4096], target[64];
-	int fd, n, i, cpid, rf, wf;
+	int fd, n, cpid, cseq, rf, wf;
 	char *p;
 
 	if(boundpath[0] == 0)
@@ -1399,42 +1403,48 @@ sysaccept(void)
 		return -11;
 	buf[n] = 0;
 	/* the marshaled directory stream carries names as plain
-	 * strings: look for x.c.<pid>.a with its x.c.<pid>.b twin */
+	 * strings: look for x.c.<pid>.<seq>.a with its .b twin */
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
 		char *q;
+		int s2;
 
 		cpid = strtol(p+4, &q, 10);
-		if(cpid <= 0 || q[0] != '.' || q[1] != 'a')
+		if(cpid <= 0 || q[0] != '.')
+			continue;
+		s2 = strtol(q+1, &q, 10);
+		cseq = s2;
+		if(s2 < 0 || q[0] != '.' || q[1] != 'a')
 			continue;	/* only the .a twin queues */
-		for(i = 0; i < nserved; i++)
-			if(servedpids[i] == cpid)
-				goto next;
-		snprint(target, sizeof target, "x.c.%d.b", cpid);
+		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
 			continue;
-		snprint(target, sizeof target, "/srv/x.c.%d.a", cpid);
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		rf = open(target, OREAD);
-		snprint(target, sizeof target, "/srv/x.c.%d.b", cpid);
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
 		wf = open(target, OWRITE);
 		if(rf < 0 || wf < 0)
 			continue;
-		if(nserved < 32)
-			servedpids[nserved++] = cpid;
+		/* consume the ticket: entries are removed once served, so
+		 * the same client can queue its next connection and stale
+		 * posts never keep the listener falsely ready */
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
+		remove(target);
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
+		remove(target);
 		return (rf<<16) | wf;
-	next: ;
 	}
 	return -11;	/* -EAGAIN */
 }
 
 /* true when a client's pipe ends sit queued in /srv and no accept
- * has served them yet: posted /srv entries outlive the connection,
- * so a raw name match would keep the listener "ready" forever */
+ * has served them yet: accept removes the entries it serves, so a
+ * pending ticket here means a genuinely waiting client */
 static int
 listenqueued(void)
 {
 	char buf[4096];
 	char *p, *q;
-	int fd, n, i, cpid, found;
+	int fd, n, cpid;
 
 	if(nlis == 0)
 		return 0;
@@ -1445,24 +1455,20 @@ listenqueued(void)
 	close(fd);
 	if(n <= 0)
 		return 0;
-	found = -1;
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
-		cpid = strtol(p+4, &q, 10);
-		if(cpid <= 0 || q[0] != '.' || q[1] != 'a')
-			continue;
-		found = cpid;
-		for(i = 0; i < nserved; i++)
-			if(servedpids[i] == cpid)
-				goto nextq;
-		return 1;
-	nextq: ;
-	}
-	{
-		static int z;
+		char tgt[64];
+		int s2;
 
-		if(z++ < 40)
-			fprint(2, "linuxrun: GATE p%d n=%d found=%d nserved=%d nlis=%d\n",
-				getpid(), n, found, nserved, nlis);
+		cpid = strtol(p+4, &q, 10);
+		if(cpid <= 0 || q[0] != '.')
+			continue;
+		s2 = strtol(q+1, &q, 10);
+		if(s2 < 0 || q[0] != '.' || q[1] != 'a')
+			continue;
+		snprint(tgt, sizeof tgt, "x.c.%d.%d.b", cpid, s2);
+		if(memfind(buf, n, tgt) == nil)
+			continue;
+		return 1;
 	}
 	return 0;
 }
