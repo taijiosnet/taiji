@@ -2400,11 +2400,25 @@ dosyscall(Ureg *ur)
 				forksnap = !(nr == 120 && (a1 & LcVmnul));
 				if(!forksnap && a2 != 0)
 					ur->sp = a2;	/* thread switch stack */
-				if(nr == 120 && a4 != 0)
-					syssetthreadarea(a4);	/* CLONE_SETTLS:
+				if(nr == 120 && a4 != 0){
+					long rr;
+
+					rr = syssetthreadarea(a4);	/* CLONE_SETTLS:
 					 * without a TLS of its own the
 					 * thread's first canary access
 					 * trips the stack protector */
+					fprint(2, "linuxrun: SETTLS p%d udesc=%lux -> %ld\n",
+						getpid(), a4, rr);
+					if(rr == 0){
+						/* kernel CLONE_SETTLS also
+						 * loads the new thread's
+						 * segment register; glibc
+						 * i386 TLS lives in %gs and
+						 * nothing else loads it in
+						 * the bounced child */
+						ur->gs = tlsselector;
+					}
+				}
 				/* Returning through the handler would call
 				 * noted() without a pending note and kill us.
 				 * Bounce off our own ud2 starter instead:
