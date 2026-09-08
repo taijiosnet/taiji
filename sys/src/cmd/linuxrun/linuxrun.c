@@ -1962,6 +1962,11 @@ dosyscall(Ureg *ur)
 	case 19:	/* lseek */
 		r = seek((int)a1, a2, a3);
 		break;
+	case 158:	/* sched_yield: glvnd's glX entry drain-wait yields in a
+		 * loop; the caller ignores the result, but ENOSYS prints
+		 * noise and looks like a missing feature */
+		r = 0;
+		break;
 	case 20:	/* getpid */
 	case 224:	/* gettid */
 		r = getpid();
@@ -3063,6 +3068,39 @@ dosyscall(Ureg *ur)
 		if(z++ < 60)
 			fprint(2, "linuxrun: E11 p%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
 				getpid(), nr, a1, a2, a3);
+	}
+	if((nr == 20 || nr == 24 || nr == 158) &&
+	   ur->pc >= 0x68000000 && ur->pc < 0x69000000){
+		/* getpid/sched_yield dispatched through ld.so's raw int80
+		 * stub (%gs:0x10).  xfwm4's freeze loops here: glvnd's
+		 * per-entry fork check (libGLX.so 0x3b50) calls getpid on
+		 * every glX* entry, and its teardown drains in-flight
+		 * entries with sched_yield.  [sp] = ret into libc getpid;
+		 * sp+4 = ret into the caller.  glvnd's pid cache and entry
+		 * refcount sit in libGLX's RW segment at fixed addresses
+		 * (this session: cache 0x42bd10dc, cnt 0x42bd10e4). */
+		static int zg;
+
+		if(zg++ < 300){
+			int q, ok;
+
+			ok = 0;
+			for(q = 0; q < nguestsegs; q++)
+				if(guestsegs[q][0] <= 0x42bd10dc &&
+				   0x42bd10e8 <= guestsegs[q][0]+guestsegs[q][1]){
+					ok = 1;
+					break;
+				}
+			fprint(2, "linuxrun: SPIN p%d nr=%lux r=%ld pc=%lux ret=%lux",
+				getpid(), nr, r, ur->pc, *(ulong*)ur->sp);
+			if(ok)
+				fprint(2, " pidcache=%lux cnt=%lux",
+					*(ulong*)0x42bd10dc, *(ulong*)0x42bd10e4);
+			fprint(2, " stk:");
+			for(q = 4; q < 68; q += 4)
+				fprint(2, " %lux", ((ulong*)ur->sp)[q/4]);
+			fprint(2, "\n");
+		}
 	}
 	if(nr == 192 || nr == 90){
 		static int zm;
