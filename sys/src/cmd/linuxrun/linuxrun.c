@@ -1279,12 +1279,13 @@ sockread(int gfd, void *buf, ulong n)
 		alarm(0);
 		probing = 0;
 		if(rr == 1){
-			/* the probe byte is real data: serve it first */
-			inq[i][0] = probe;
-			inqn[i] = 1;
+			/* the probe byte is real data: serve it directly -
+			 * inq[i] may never have been allocated (a socket
+			 * that sockdrain never saw) and writing through a
+			 * nil pointer here killed client and server alike
+			 * (fault write addr=0x0, pc in the probe) */
 			b = n < 1 ? n : 1;
-			memmove(buf, inq[i], b);
-			inqn[i] -= b;
+			memmove(buf, &probe, b);
 			sockopc(i, buf, b, 0);
 			return b;
 		}
