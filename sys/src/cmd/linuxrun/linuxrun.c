@@ -1847,7 +1847,7 @@ dosyscall(Ureg *ur)
 						getpid(), sockmap[si][0], a, b,
 						sysri ? sysring[(sysri-1)%32][0] : 0,
 						inqn[si], sockrawqlen(si));
-					fprint(2, "linuxrun: TAIL p%d", getpid());
+					fprint(2, "linuxrun: TAIL p%d pc=%lux bp=%lux", getpid(), ur->pc, ur->bp);
 					for(q = 16; q > 0; q--){
 						if(sysri > q)
 							bsys = sysring[(sysri-q)%32][0];
