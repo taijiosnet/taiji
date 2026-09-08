@@ -2393,8 +2393,11 @@ dosyscall(Ureg *ur)
 				 * has finished on its own */
 				if(forkready[0] >= 0){
 					char b[1];
+					static int z;
 
 					close(forkready[1]);
+					if(z++ < 10)
+						fprint(2, "linuxrun: FPARK p%d waiting forkready\n", getpid());
 					read(forkready[0], b, 1);
 					close(forkready[0]);
 				}
@@ -2621,6 +2624,18 @@ dosyscall(Ureg *ur)
 				memmove(rin, (void*)a2, (maxfd+7)/8);
 			if(a3 != 0)
 				memmove(win, (void*)a3, (maxfd+7)/8);
+			{
+				static int z;
+				int lm, ln;
+
+				ln = 0;
+				for(lm = 0; lm < 16; lm++)
+					if(sockmap[lm][1] && sockmap[lm][2] == 0)
+						ln++;
+				if(z++ < 40)
+					fprint(2, "linuxrun: SEL p%d nfds=%d lis=%d queued=%d\n",
+						getpid(), maxfd, ln, listenqueued());
+			}
 			/* zero-timeout selects poll without sleeping;
 			 * everything else breathes between iterations */
 			if(a5 == 0 || (((ulong*)a5)[0] | ((ulong*)a5)[1]) != 0)
@@ -3098,20 +3113,34 @@ traphandler(void *v, char *msg)
 		*ur = forkregs;
 		if(forksnap){
 			int s, tfd;
+			void *scratchseg;
 			ulong va, len, ulen, a, fastlen;
 			char snapname[64];
 			static uchar pg[Pgsz];
 
 			forksnap = 0;
 			fastlen = 0;
-			/* Copy the image through a scratch file, one page
-			 * at a time, skipping untouched (all-zero) pages:
-			 * fresh "memory" attachments come back zeroed, and
-			 * neither a big malloc nor an extra segment is
-			 * available inside this note handler. */
+			/* Copy the image, one page at a time, skipping
+			 * untouched (all-zero) pages: fresh "memory"
+			 * attachments come back zeroed. */
+			/* RAM snapshot via an extra demand-paged
+			 * segment: the ufs /tmp trickles at KB/s and a
+			 * 60MB copy parked the X server on its fork
+			 * handshake for the whole session; if the attach
+			 * refuses, fall back to the file */
+			scratchseg = (void*)-1;
 			snprint(snapname, sizeof snapname,
 				"/tmp/lrsnap.%d", getpid());
-			tfd = -1;
+			tfd = create(snapname, ORDWR|OTRUNC, 0600);
+			if(tfd < 0){
+				fprint(2, "linuxrun: fork snap create: %r\n");
+				if(forkready[1] >= 0){
+					write(forkready[1], "x", 1);
+					close(forkready[1]);
+					forkready[1] = -1;
+				}
+				exits("fork snapshot");
+			}
 			/* RAM scratch when the touched pages fit: the
 			 * ufs-backed /tmp costs tens of seconds per
 			 * 70MB GTK fork and stalls the whole session;
@@ -3122,8 +3151,8 @@ traphandler(void *v, char *msg)
 
 				cur = nil;
 				fasttot = 0;
-				if(forkscratch != nil){
-					cur = (uchar*)forkscratch;
+				if(scratchseg != (void*)-1){
+					cur = (uchar*)scratchseg;
 				}
 				for(s = 0; s < nguestsegs; s++){
 					va = guestsegs[s][0];
@@ -3183,8 +3212,8 @@ traphandler(void *v, char *msg)
 			{
 				uchar *cur;
 
-				cur = (uchar*)forkscratch;
-				while(cur && cur < (uchar*)forkscratch + fastlen){
+				cur = (uchar*)scratchseg;
+				while(cur && cur < (uchar*)scratchseg + fastlen){
 					memmove((void*)((ulong*)cur)[0], cur+8, Pgsz);
 					cur += 8 + Pgsz;
 				}
@@ -3207,6 +3236,8 @@ traphandler(void *v, char *msg)
 				close(tfd);
 				remove(snapname);
 			}
+			if(scratchseg != (void*)-1)
+				segdetach(scratchseg);
 		}
 		/* every fork in this workload execs right away (xkbcomp,
 		 * dash, g_spawn helpers, xterm's shell); a child that
@@ -3230,6 +3261,12 @@ traphandler(void *v, char *msg)
 			}
 		}
 		if(forkready[1] >= 0){
+			{
+				static int z;
+
+				if(z++ < 10)
+					fprint(2, "linuxrun: FPOST p%d posting forkready\n", getpid());
+			}
 			write(forkready[1], "x", 1);
 			close(forkready[1]);
 			forkready[1] = -1;
@@ -3395,10 +3432,9 @@ main(int argc, char *argv[])
 
 	brkcur = Brkbase;
 	segat(Mapbase, Mapsize);
-	/* snapshots use the file path; the session mounts a
-	 * ramfs on /tmp so that path is RAM-fast */
-	forkscratch = nil;
 
+	forkscratch = nil;	/* kernel COW replaced the snapshot;
+				 * the scratch starved the note stack */
 	stacktop = buildstack(argc, argv);
 	if(verbose)
 		fprint(2, "linuxrun: entry %#lux stack %#lux\n", entrypc, stacktop);
