@@ -3111,39 +3111,38 @@ traphandler(void *v, char *msg)
 		 * pipe and cannot touch the shared segments) */
 		forkpending = 0;
 		*ur = forkregs;
-		/* release the parent BEFORE the snapshot: detaching and
-		 * reattaching touches only this child's mappings, and
-		 * every fork here execs (which discards the copy), so
-		 * a 60MB trickle through the ufs /tmp must not park
-		 * the X server for the whole session */
-		if(forkready[1] >= 0){
-			write(forkready[1], "x", 1);
-			close(forkready[1]);
-			forkready[1] = -1;
-		}
 		if(forksnap){
-			int s, tfd;
-			void *scratchseg;
-			ulong va, len, ulen, a, fastlen;
-			char snapname[64];
-			static uchar pg[Pgsz];
+			int s, pmfd;
+			ulong va, len, ulen, a;
+			char ppidbuf[16];
+			int ppid;
 
 			forksnap = 0;
-			fastlen = 0;
-			/* Copy the image, one page at a time, skipping
-			 * untouched (all-zero) pages: fresh "memory"
-			 * attachments come back zeroed. */
-			/* RAM snapshot via an extra demand-paged
-			 * segment: the ufs /tmp trickles at KB/s and a
-			 * 60MB copy parked the X server on its fork
-			 * handshake for the whole session; if the attach
-			 * refuses, fall back to the file */
-			scratchseg = (void*)-1;
-			snprint(snapname, sizeof snapname,
-				"/tmp/lrsnap.%d", getpid());
-			tfd = create(snapname, ORDWR|OTRUNC, 0600);
-			if(tfd < 0){
-				fprint(2, "linuxrun: fork snap create: %r\n");
+			/* Rebuild this child's image from the PARENT's
+			 * memory through /proc/<ppid>/mem - RAM speed,
+			 * no ufs file.  The old page-file snapshot
+			 * trickled a 200MB image at ~500KB/s and
+			 * parked the X server behind its xkbcomp fork
+			 * for the whole session.  The parent keeps its
+			 * shared segments, so its content stays
+			 * readable while we copy. */
+			pmfd = open("#c/ppid", OREAD);
+			if(pmfd >= 0){
+				int n;
+
+				n = readn(pmfd, ppidbuf, sizeof ppidbuf-1);
+				close(pmfd);
+				if(n <= 0)
+					exits("fork ppid");
+				ppidbuf[n] = 0;
+				ppid = strtol(ppidbuf, nil, 10);
+				snprint(ppidbuf, sizeof ppidbuf,
+					"/proc/%d/mem", ppid);
+				pmfd = open(ppidbuf, OREAD);
+			}else
+				pmfd = -1;
+			if(pmfd < 0){
+				fprint(2, "linuxrun: fork mem open: %r\n");
 				if(forkready[1] >= 0){
 					write(forkready[1], "x", 1);
 					close(forkready[1]);
@@ -3151,103 +3150,56 @@ traphandler(void *v, char *msg)
 				}
 				exits("fork snapshot");
 			}
-			/* RAM scratch when the touched pages fit: the
-			 * ufs-backed /tmp costs tens of seconds per
-			 * 70MB GTK fork and stalls the whole session;
-			 * pages beyond the scratch spill to the file */
-			{
-				uchar *cur;
-				ulong fasttot;
-
-				cur = nil;
-				fasttot = 0;
-				if(scratchseg != (void*)-1){
-					cur = (uchar*)scratchseg;
-				}
-				for(s = 0; s < nguestsegs; s++){
-					va = guestsegs[s][0];
-					len = ulen = guestsegs[s][1];
-					if(va == Mapbase)
-						ulen = mapbump - Mapbase;
-					for(a = 0; a < ulen; a += Pgsz){
-						ulong hdr[2];
-						uchar *pp;
-						int k, nz;
-
-						pp = (uchar*)va + a;
-						nz = 0;
-						for(k = 0; k < Pgsz; k += sizeof(ulong))
-							if(*(ulong*)(pp+k) != 0){
-								nz = 1;
-								break;
-							}
-						if(!nz)
-							continue;
-						if(cur != nil && fasttot + 8 + Pgsz <= Scratchsize){
-							((ulong*)cur)[0] = (ulong)pp;
-							((ulong*)cur)[1] = Pgsz;
-							memmove(cur+8, pp, Pgsz);
-							cur += 8 + Pgsz;
-							fasttot += 8 + Pgsz;
-							continue;
-						}
-						/* overflowed RAM: spill the rest to the file */
-						hdr[0] = (ulong)pp;
-						hdr[1] = Pgsz;
-						if(tfd < 0){
-							tfd = create(snapname, ORDWR|OTRUNC, 0600);
-							if(tfd < 0){
-								fprint(2, "linuxrun: fork snap create: %r\n");
-								exits("fork snapshot");
-							}
-						}
-						if(write(tfd, hdr, 8) != 8 ||
-						    write(tfd, pp, Pgsz) != Pgsz){
-							fprint(2, "linuxrun: fork snap write: %r\n");
-							exits("fork snapshot");
-						}
-					}
-				}
-				fastlen = fasttot;
-			}
+			/* fresh private segments, then pull the
+			 * parent's pages in */
 			for(s = 0; s < nguestsegs; s++){
 				va = guestsegs[s][0];
 				segdetach((void*)va);
-				if(segattach(0, "memory", (void*)va, guestsegs[s][1]) == (void*)-1){
+				if(segattach(0, "shared", (void*)va,
+				    guestsegs[s][1]) == (void*)-1){
 					fprint(2, "linuxrun: fork attach %#lux %#lux: %r\n",
 						va, guestsegs[s][1]);
+					close(pmfd);
+					if(forkready[1] >= 0){
+						write(forkready[1], "x", 1);
+						close(forkready[1]);
+						forkready[1] = -1;
+					}
 					exits("fork attach");
 				}
 			}
-			{
-				uchar *cur;
-
-				cur = (uchar*)scratchseg;
-				while(cur && cur < (uchar*)scratchseg + fastlen){
-					memmove((void*)((ulong*)cur)[0], cur+8, Pgsz);
-					cur += 8 + Pgsz;
-				}
-			}
-			if(tfd >= 0){
-				seek(tfd, 0, 0);
-				for(;;){
-					ulong hdr[2];
+			for(s = 0; s < nguestsegs; s++){
+				va = guestsegs[s][0];
+				len = guestsegs[s][1];
+				ulen = len;
+				if(va == Mapbase)
+					ulen = mapbump - Mapbase;
+				for(a = 0; a < ulen; a += Pgsz){
 					long n;
 
-					n = readn(tfd, hdr, 8);
-					if(n < 8)
-						break;
-					if(readn(tfd, pg, Pgsz) != Pgsz){
-						fprint(2, "linuxrun: fork snap read: %r\n");
+					n = pread(pmfd, (void*)(va+a), Pgsz, va+a);
+					if(n < 0){
+						fprint(2, "linuxrun: fork mem read %lux: %r\n", va+a);
+						close(pmfd);
+						if(forkready[1] >= 0){
+							write(forkready[1], "x", 1);
+							close(forkready[1]);
+							forkready[1] = -1;
+						}
 						exits("fork snapshot");
 					}
-					memmove((void*)hdr[0], pg, Pgsz);
 				}
-				close(tfd);
-				remove(snapname);
 			}
-			if(scratchseg != (void*)-1)
-				segdetach(scratchseg);
+			close(pmfd);
+		}
+		/* the parent stays parked until the copy completes: the
+		 * child runs guest code (dash) on this image before
+		 * exec, and a torn copy null-derefs - but /proc/mem
+		 * copies at RAM speed, so the park lasts seconds */
+		if(forkready[1] >= 0){
+			write(forkready[1], "x", 1);
+			close(forkready[1]);
+			forkready[1] = -1;
 		}
 		/* every fork in this workload execs right away (xkbcomp,
 		 * dash, g_spawn helpers, xterm's shell); a child that
