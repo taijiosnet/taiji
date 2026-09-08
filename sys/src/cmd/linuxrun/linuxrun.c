@@ -2642,16 +2642,17 @@ dosyscall(Ureg *ur)
 			r = n;
 		}
 		break;
-	case 323:	/* eventfd: a pipe pair, counter semantics ignored */
+	case 323:	/* eventfd: stand in as a bridge pipe - the counter
+		 * semantics are approximated by the stream, and the
+		 * socket map keeps both ends so guest writes reach the
+		 * wakeup pipe and poll stays honest */
 		{
 			int p[2];
 
 			if(pipe(p) < 0)
 				r = -Enomem;
-			else{
-				close(p[1]);
-				r = p[0];
-			}
+			else
+				r = socknewslot((p[0]<<16) | p[1]);
 		}
 		break;
 	case 2:		/* fork */
@@ -3293,18 +3294,19 @@ dosyscall(Ureg *ur)
 			r = 0;
 		}
 		break;
-	case 328:	/* eventfd2: a pipe stands in; the counter
-			 * semantics are approximated by the stream */
+	case 328:	/* eventfd2: stand in as a bridge pipe, like 323 -
+			 * a closed write end would be EOF, i.e.
+			 * permanently POLLIN-ready, and glib polls its
+			 * wakeup eventfd: that fake readiness spun xfwm4's
+			 * main loop forever */
 	case 290:	/* mlock */
 		{
 			int p[2];
 
 			if(pipe(p) < 0)
 				r = -Enomem;
-			else{
-				close(p[1]);
-				r = p[0];
-			}
+			else
+				r = socknewslot((p[0]<<16) | p[1]);
 		}
 		break;
 		case 406:	/* clock_nanosleep_time64(clk, flags, req64, rem64):
