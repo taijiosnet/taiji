@@ -1117,6 +1117,66 @@ dumpopc(void)
 	}
 }
 
+/* CLONE_FILES threads share the guest fd table, but each thread is a
+ * separate host process whose host-side sockmap is only a fork-time
+ * copy (and the bounce used to wipe it outright).  A connection the
+ * parent opened after the clone then resolves to "not a socket" and
+ * the poll layer reports it always-ready - xfwm4's main loop spun
+ * forever on such an fd.  Threads re-discover the parent's newer
+ * connections from its live memory; the pipe ends are re-opened
+ * locally through /proc/<ppid>/fd/N. */
+int forkppid;
+
+static void
+socksync(void)
+{
+	char ppath[64], fpath[64];
+	ulong nmap[NSOCK][4];
+	int m, i;
+
+	if(forkppid <= 0 || forkppid == getpid())
+		return;
+	snprint(ppath, sizeof ppath, "/proc/%d/mem", forkppid);
+	m = open(ppath, OREAD);
+	if(m < 0)
+		return;
+	if(pread(m, nmap, sizeof nmap, (vlong)(ulong)sockmap) == sizeof nmap){
+		int ncop;
+
+		ncop = 0;
+		for(i = 0; i < NSOCK; i++){
+			int rf, wf;
+
+			if(!nmap[i][1] || sockmap[i][1])
+				continue;
+			rf = nmap[i][2] >> 16;
+			wf = nmap[i][2] & 0xffff;
+			snprint(fpath, sizeof fpath, "/proc/%d/fd/%d", forkppid, rf);
+			rf = open(fpath, OREAD);
+			snprint(fpath, sizeof fpath, "/proc/%d/fd/%d", forkppid, wf);
+			wf = open(fpath, OWRITE);
+			if(rf < 0 || wf < 0){
+				if(rf >= 0)
+					close(rf);
+				if(wf >= 0)
+					close(wf);
+				continue;
+			}
+			sockmap[i][0] = nmap[i][0];
+			sockmap[i][1] = 1;
+			sockmap[i][2] = (rf<<16) | wf;
+			sockmap[i][3] = nmap[i][3];
+			soeof[i] = 0;
+			inqn[i] = 0;
+			ncop++;
+		}
+		if(ncop)
+			fprint(2, "linuxrun: SOCKSYNC p%d from p%d +%d\n",
+				getpid(), forkppid, ncop);
+	}
+	close(m);
+}
+
 static int
 sockslot(int fd)
 {
@@ -1125,6 +1185,19 @@ sockslot(int fd)
 	for(i = 0; i < NSOCK; i++)
 		if(sockmap[i][1] && sockmap[i][0] == fd)
 			return i;
+	if(forkppid > 0){
+		static vlong last;
+		vlong now;
+
+		now = nsec();
+		if(now - last > 100LL*1000*1000){
+			last = now;
+			socksync();
+			for(i = 0; i < NSOCK; i++)
+				if(sockmap[i][1] && sockmap[i][0] == fd)
+					return i;
+		}
+	}
 	return -1;
 }
 
@@ -1245,6 +1318,17 @@ sockread(int gfd, void *buf, ulong n)
 	ulong b;
 
 	i = sockslot(gfd);
+	{
+		/* who consumes bridge sockets: the xfwm4 spin has one
+		 * thread polling a readable fd while the bytes vanish
+		 * between check and drain - the reader's pid names the
+		 * thread eating the connection */
+		static int zr;
+
+		if(i >= 0 && zr++ % 50 == 0 && zr < 3000)
+			fprint(2, "linuxrun: RLOG p%d fd=%d inq=%lud qlen=%lud\n",
+				getpid(), (int)gfd, inqn[i], sockrawqlen(i));
+	}
 	if(i >= 0 && inqn[i] > 0){
 		ulong b;
 
@@ -2438,6 +2522,26 @@ dosyscall(Ureg *ur)
 				 * getting an immediate empty return. */
 				sleep(a4 > 50 ? 50 : a4);
 			}
+			{
+				/* the spin forensics probe: what timeout the
+				 * guest asked for, how many events came back,
+				 * and what fds are registered on this epfd */
+				static int zep;
+				int zi, zn;
+
+				if(zep++ % 1000 == 0){
+					zn = 0;
+					fprint(2, "linuxrun: EPW p%d epfd=%d to=%ld n=%d fds:",
+						getpid(), (int)a1, (long)a4, n);
+					for(zi = 0; zi < Maxep && zn < 10; zi++){
+						if(eptab[zi].epfd == (int)a1){
+							fprint(2, " %d", (int)eptab[zi].fd);
+							zn++;
+						}
+					}
+					fprint(2, "\n");
+				}
+			}
 			r = n;
 		}
 		break;
@@ -2753,6 +2857,47 @@ dosyscall(Ureg *ur)
 				sleep(20);
 				if(tleft > 0)
 					tleft -= 20;
+			}
+			{
+				/* spin forensics: what GTK-style callers are
+				 * waiting on and what they got back - plus
+				 * pc/bp/stack: a user-mode busy loop sampled
+				 * at its poll sites names its glib source */
+				static int zp;
+
+				if(zp++ % 400 == 0 && zp < 4000){
+					long k2;
+					int qi;
+
+					fprint(2, "linuxrun: PLOG p%d n=%ld to=%ld:",
+						getpid(), r, (long)a3);
+					for(k2 = 0; k2 < (long)a2 && k2 < 6; k2++)
+						fprint(2, " %d/%ux/%ux",
+							pf[k2].fd, pf[k2].events, pf[k2].revents);
+					fprint(2, " pc=%lux bp=%lux stk:",
+						ur->pc, ur->bp);
+					for(k2 = 1; k2 < 8; k2++)
+						fprint(2, " %lux", ((ulong*)ur->sp)[k2]);
+					/* the unread-data theory: a reply nobody
+					 * reads keeps the fd readable forever;
+					 * peek its first bytes (X protocol) */
+					for(k2 = 0; k2 < (long)a2 && k2 < 6; k2++){
+						qi = sockslot(pf[k2].fd);
+						if(qi >= 0 && (pf[k2].revents & 1)){
+							if(inqn[qi] == 0)
+								sockdrain(qi);
+							if(inqn[qi] > 0){
+								int qb, qn;
+
+								fprint(2, " peek:");
+								qn = inqn[qi] < 16 ? inqn[qi] : 16;
+								for(qb = 0; qb < qn; qb++)
+									fprint(2, " %2.2ux", inq[qi][qb]);
+							}
+						}
+					}
+					fprint(2, "\n");
+				}
 			}
 		}else{
 			if(a3 == 0)
@@ -3075,19 +3220,25 @@ dosyscall(Ureg *ur)
 		}
 		r = 0;
 		break;
-	case 403:	/* clock_gettime64 */
-	case 408:	/* clock_gettime64 alias used by some stubs */
-		if(a2 < 0x10000)
-			r = -Efault;
-		else{
-			vlong t;
+		case 403:	/* clock_gettime64 */
+		case 408:	/* clock_gettime64 alias used by some stubs */
+			if(a2 < 0x10000)
+				r = -Efault;
+			else{
+				vlong t;
+				static int zck;
 
-			t = nsec();
-			((vlong*)a2)[0] = t/1000000000;
-			((vlong*)a2)[1] = t%1000000000;
-			r = 0;
-		}
-		break;
+				t = nsec();
+				((vlong*)a2)[0] = t/1000000000;
+				((vlong*)a2)[1] = t%1000000000;
+				if(zck++ % 2000 == 0)
+					fprint(2, "linuxrun: CK64 p%d clk=%ld sec=%lld nsec=%lld\n",
+						getpid(), (long)a1,
+						(vlong)(t/1000000000),
+						(vlong)(t%1000000000));
+				r = 0;
+			}
+			break;
 	case 422:	/* futex_time64 */
 		r = dofutex(a1, a2, a3, a4);
 		break;
@@ -3369,16 +3520,23 @@ traphandler(void *v, char *msg)
 		 * our own note stack now, so it is safe to privatize the
 		 * guest image (the parent is parked on the forkready
 		 * pipe and cannot touch the shared segments) */
+		int wassnap;
+
 		forkpending = 0;
 		fprint(2, "linuxrun: FBOUNCE p%d\n", getpid());
 		*ur = forkregs;
-		if(forksnap){
+		/* which kind of child we are: a snapshot fork rebuilds
+		 * private memory and drops the bridge; a CLONE_FILES
+		 * thread keeps its inherited socket map and re-syncs
+		 * newer connections from the parent */
+		wassnap = forksnap;
+		forksnap = 0;
+		if(wassnap){
 			int s, pmfd;
 			ulong va, len, ulen, a;
 			char ppidbuf[16];
 			int ppid;
 
-			forksnap = 0;
 			/* Rebuild this child's image from the PARENT's
 			 * memory through /proc/<ppid>/mem - RAM speed,
 			 * no ufs file.  The old page-file snapshot
@@ -3454,6 +3612,26 @@ traphandler(void *v, char *msg)
 			}
 			close(pmfd);
 			fprint(2, "linuxrun: FMEM p%d copy done\n", getpid());
+		}else{
+			/* CLONE_FILES thread: adopt the thread-group parent
+			 * for socket lookups and pull in the connections it
+			 * opened since the clone (the inherited map is a
+			 * fork-time copy) */
+			char pb[16];
+			int pm, n;
+
+			pm = open("#c/ppid", OREAD);
+			if(pm >= 0){
+				n = readn(pm, pb, sizeof pb-1);
+				close(pm);
+				if(n > 0){
+					pb[n] = 0;
+					forkppid = strtol(pb, nil, 10);
+				}
+			}
+			socksync();
+			fprint(2, "linuxrun: THREADSYNC p%d parent=%d\n",
+				getpid(), forkppid);
 		}
 		/* the parent stays parked until the copy completes: the
 		 * child runs guest code (dash) on this image before
@@ -3470,8 +3648,11 @@ traphandler(void *v, char *msg)
 		 * the same pipes - stealing the parent's replies - and
 		 * its exit closed the pipes under the parent.  Close
 		 * the bridge in the child; CLOEXEC handling on exec
-		 * covers anything else. */
-		{
+		 * covers anything else.  A CLONE_FILES thread is NOT an
+		 * exec candidate: it shares the table - wiping its map
+		 * is what made a shared fd look "not a socket" and
+		 * spin the main loop on a fake-ready poll. */
+		if(wassnap){
 			int q;
 
 			for(q = 0; q < NSOCK; q++){
