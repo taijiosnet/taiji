@@ -1203,11 +1203,12 @@ sockslot(int fd)
 			 * them - opening the name shares the channel */
 			{
 				char nb[64];
-				int rf, wf, ff, s, fl;
+				int rf, wf, ff, s, fl, key0;
 
-				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", forkppid, fd);
+				key0 = guestprocid ? (int)guestprocid : getpid();
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key0, fd);
 				rf = open(nb, OREAD);
-				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", forkppid, fd);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key0, fd);
 				wf = open(nb, OWRITE);
 				if(rf >= 0 && wf >= 0){
 					for(s = 0; s < NSOCK; s++)
@@ -1215,7 +1216,7 @@ sockslot(int fd)
 							break;
 					if(s < NSOCK){
 						fl = 0;
-						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", forkppid, fd);
+						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key0, fd);
 						ff = open(nb, OREAD);
 						if(ff >= 0){
 							char fb[8];
@@ -1280,7 +1281,7 @@ sockmapfd(int fd, ulong packed)
 		char nb[64];
 		int key, pf;
 
-		key = forkppid > 0 ? forkppid : getpid();
+		key = guestprocid ? (int)guestprocid : getpid();
 		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
 		postsrvfd(nb, packed >> 16);
 		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
@@ -2176,7 +2177,7 @@ dosyscall(Ureg *ur)
 				char nb[64];
 				int key;
 
-				key = forkppid > 0 ? forkppid : getpid();
+				key = guestprocid ? (int)guestprocid : getpid();
 				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, (int)a1);
 				remove(nb);
 				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, (int)a1);
@@ -3221,7 +3222,7 @@ dosyscall(Ureg *ur)
 						char nb[64];
 						int key, pf;
 
-						key = forkppid > 0 ? forkppid : getpid();
+						key = guestprocid ? (int)guestprocid : getpid();
 						snprint(nb, sizeof nb,
 							"/srv/x.m.%d.%d.f", key, (int)a1);
 						pf = create(nb, OWRITE|OTRUNC, 0666);
