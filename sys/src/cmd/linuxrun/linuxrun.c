@@ -1207,13 +1207,17 @@ sockwritefd(int fd)
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
-/* the alarm note only guards the 1-byte EOF probe below: handled
- * means the interrupted read returns -1 and the caller sees EAGAIN */
+/* the alarm note guards the 1-byte EOF probe below.  If the note
+ * lands between alarm(1) and the read entering the kernel, the read
+ * would block forever on a live writer - so re-arm: a second note
+ * interrupts even that late-blocked read */
 static int
 alarmnote(void *v, char *msg)
 {
-	if(msg != nil && strcmp(msg, "alarm") == 0)
+	if(msg != nil && strcmp(msg, "alarm") == 0){
+		alarm(1);
 		return 1;
+	}
 	return 0;
 }
 
