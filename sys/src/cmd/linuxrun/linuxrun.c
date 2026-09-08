@@ -594,6 +594,7 @@ static int sockslot(int);
 static int socknewslot(ulong);
 static int sockinready(int);
 extern int sockmap[16][4];
+static int postsrvfd(char*, int);
 
 /* sendmsg: a msghdr carries msg_iov at offset 8, msg_iovlen at 12 */
 static long
@@ -1196,6 +1197,53 @@ sockslot(int fd)
 			for(i = 0; i < NSOCK; i++)
 				if(sockmap[i][1] && sockmap[i][0] == fd)
 					return i;
+			/* a sibling thread may have opened this connection
+			 * after our clone: bridge endpoints are published in
+			 * /srv (x.m.<tgid>.<fd>.r/.w/.f) by whoever created
+			 * them - opening the name shares the channel */
+			{
+				char nb[64];
+				int rf, wf, ff, s, fl;
+
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", forkppid, fd);
+				rf = open(nb, OREAD);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", forkppid, fd);
+				wf = open(nb, OWRITE);
+				if(rf >= 0 && wf >= 0){
+					for(s = 0; s < NSOCK; s++)
+						if(!sockmap[s][1])
+							break;
+					if(s < NSOCK){
+						fl = 0;
+						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", forkppid, fd);
+						ff = open(nb, OREAD);
+						if(ff >= 0){
+							char fb[8];
+							int fn;
+
+							fn = readn(ff, fb, sizeof fb-1);
+							close(ff);
+							if(fn > 0){
+								fb[fn] = 0;
+								fl = strtol(fb, nil, 10);
+							}
+						}
+						sockmap[s][0] = fd;
+						sockmap[s][1] = 1;
+						sockmap[s][2] = (rf<<16) | wf;
+						sockmap[s][3] = fl;
+						soeof[s] = 0;
+						inqn[s] = 0;
+						fprint(2, "linuxrun: ADOPT p%d fd=%d from tgid=%d\n",
+							getpid(), fd, forkppid);
+						return s;
+					}
+				}
+				if(rf >= 0)
+					close(rf);
+				if(wf >= 0)
+					close(wf);
+			}
 		}
 	}
 	return -1;
@@ -1225,6 +1273,25 @@ sockmapfd(int fd, ulong packed)
 	sockmap[j][1] = 1;
 	sockmap[j][2] = packed;
 	sockmap[j][3] = 0;
+	/* publish the pipe ends so CLONE_FILES siblings can adopt this
+	 * connection (keyed by thread-group id: forkppid for threads,
+	 * own pid otherwise) */
+	{
+		char nb[64];
+		int key, pf;
+
+		key = forkppid > 0 ? forkppid : getpid();
+		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
+		postsrvfd(nb, packed >> 16);
+		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
+		postsrvfd(nb, packed & 0xffff);
+		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
+		pf = create(nb, OWRITE|OTRUNC, 0666);
+		if(pf >= 0){
+			fprint(pf, "0");
+			close(pf);
+		}
+	}
 	return j;
 }
 
@@ -2106,6 +2173,16 @@ dosyscall(Ureg *ur)
 
 			i = sockslot((int)a1);
 			if(i >= 0){
+				char nb[64];
+				int key;
+
+				key = forkppid > 0 ? forkppid : getpid();
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, (int)a1);
+				remove(nb);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, (int)a1);
+				remove(nb);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, (int)a1);
+				remove(nb);
 				close(sockmap[i][2] >> 16);
 				close(sockmap[i][2] & 0xffff);
 				sockmap[i][1] = 0;
@@ -3128,16 +3205,32 @@ dosyscall(Ureg *ur)
 					r = 0x802;	/* O_RDWR|O_NONBLOCK */
 			}
 			break;
-		case 4:	/* SETFL: remember O_NONBLOCK on bridge sockets -
-			 * XCB and Xorg both read sockets expecting EAGAIN
-			 * when empty, and a blocking read deadlocks the
-			 * whole connection */
+			case 4:	/* SETFL: remember O_NONBLOCK on bridge sockets -
+				 * XCB and Xorg both read sockets expecting EAGAIN
+				 * when empty, and a blocking read deadlocks the
+				 * whole connection */
 			{
 				int i;
 
 				i = sockslot((int)a1);
-				if(i >= 0)
+				if(i >= 0){
 					sockmap[i][3] = (a3 & 0x800) != 0;
+					/* keep the published flag current for
+					 * threads that adopt this connection */
+					{
+						char nb[64];
+						int key, pf;
+
+						key = forkppid > 0 ? forkppid : getpid();
+						snprint(nb, sizeof nb,
+							"/srv/x.m.%d.%d.f", key, (int)a1);
+						pf = create(nb, OWRITE|OTRUNC, 0666);
+						if(pf >= 0){
+							fprint(pf, "%d", sockmap[i][3]);
+							close(pf);
+						}
+					}
+				}
 			}
 			r = 0;
 			break;
