@@ -2406,6 +2406,7 @@ dosyscall(Ureg *ur)
 				forkregs = *ur;
 				forkregs.pc = ur->pc + 2;
 				forkpending = 1;
+				fprint(2, "linuxrun: FCHILD p%d bouncing\n", getpid());
 				starter = (void(*)(void))trapinsn;
 				starter();
 				exits("fork child");	/* not reached */
@@ -3164,6 +3165,7 @@ traphandler(void *v, char *msg)
 		 * guest image (the parent is parked on the forkready
 		 * pipe and cannot touch the shared segments) */
 		forkpending = 0;
+		fprint(2, "linuxrun: FBOUNCE p%d\n", getpid());
 		*ur = forkregs;
 		if(forksnap){
 			int s, pmfd;
@@ -3195,6 +3197,7 @@ traphandler(void *v, char *msg)
 				pmfd = open(ppidbuf, OREAD);
 			}else
 				pmfd = -1;
+			fprint(2, "linuxrun: FMEM p%d parent=%d open=%d\n", getpid(), ppid, pmfd);
 			if(pmfd < 0){
 				fprint(2, "linuxrun: fork mem open: %r\n");
 				if(forkready[1] >= 0){
@@ -3245,6 +3248,7 @@ traphandler(void *v, char *msg)
 				}
 			}
 			close(pmfd);
+			fprint(2, "linuxrun: FMEM p%d copy done\n", getpid());
 		}
 		/* the parent stays parked until the copy completes: the
 		 * child runs guest code (dash) on this image before
