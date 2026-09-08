@@ -3175,6 +3175,7 @@ traphandler(void *v, char *msg)
 		/* the kernel gates guest int $0x80 here (devldt procs) */
 		if(!started){
 			started = 1;
+			guestprocid = getpid();
 			ur->pc = entrypc;
 			ur->sp = stacktop;
 			ur->ax = 0;
@@ -3231,6 +3232,7 @@ traphandler(void *v, char *msg)
 		return 0;
 	if(!started){
 		started = 1;
+		guestprocid = getpid();
 		ur->pc = entrypc;
 		ur->sp = stacktop;
 		ur->ax = 0;
