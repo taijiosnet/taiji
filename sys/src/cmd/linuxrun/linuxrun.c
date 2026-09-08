@@ -184,6 +184,15 @@ int initedtls;
 ulong guestsegs[16][2];
 int nguestsegs;
 
+/* The guest-visible process id.  Every clone thread is a separate host
+ * process with its own host pid, but threads share the guest image and
+ * must all see one getpid(): glvnd's libGLX fork check (and glib) store
+ * the pid in shared memory and reset everything when it changes between
+ * calls - host pids per thread made xfwm4 spin in __glDispatchReset
+ * forever.  CLONE_VM children inherit the parent's value through the
+ * rfork copy; real fork children re-assign their own new pid. */
+ulong guestprocid;
+
 /* AF_UNIX sockets bridged over plan9 pipes: the listener publishes
  * "spid fd" at the socket path; connect opens /proc/spid/fd and hands
  * over its own two data pipes; accept reads the request. */
@@ -1967,8 +1976,12 @@ dosyscall(Ureg *ur)
 		 * noise and looks like a missing feature */
 		r = 0;
 		break;
-	case 20:	/* getpid */
-	case 224:	/* gettid */
+	case 20:	/* getpid: stable across clone threads (see guestprocid) */
+		if(guestprocid == 0)
+			guestprocid = getpid();
+		r = guestprocid;
+		break;
+	case 224:	/* gettid: unique per thread == our host pid */
 		r = getpid();
 		break;
 	case 24:	/* getuid */
@@ -2405,6 +2418,11 @@ dosyscall(Ureg *ur)
 				forksnap = !(nr == 120 && (a1 & LcVmnul));
 				if(!forksnap && a2 != 0)
 					ur->sp = a2;	/* thread switch stack */
+				if(forksnap)
+					/* fresh guest process: adopt the new
+					 * host pid (CLONE_VM threads keep
+					 * the parent's guestprocid copy) */
+					guestprocid = getpid();
 				if(nr == 120 && a4 != 0){
 					long rr;
 
