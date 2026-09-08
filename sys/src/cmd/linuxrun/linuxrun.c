@@ -1325,6 +1325,25 @@ socknewslot(ulong packed)
 		sockmap[i][0] = fd;
 		sockmap[i][1] = 1;
 		sockmap[i][2] = packed;
+		sockmap[i][3] = 0;
+		/* same /srv publication as sockmapfd: accepted and
+		 * socketpair-ish connections go through here */
+		{
+			char nb[64];
+			int key, pf;
+
+			key = guestprocid ? (int)guestprocid : getpid();
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
+			postsrvfd(nb, packed >> 16);
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
+			postsrvfd(nb, packed & 0xffff);
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
+			pf = create(nb, OWRITE|OTRUNC, 0666);
+			if(pf >= 0){
+				fprint(pf, "0");
+				close(pf);
+			}
+		}
 		return fd;
 	}
 	return -1;
