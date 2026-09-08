@@ -1246,10 +1246,20 @@ sockread(int gfd, void *buf, ulong n)
 	if(i >= 0 && soeof[i])
 		return 0;
 	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0){
+		/* the probe costs a 1ms alarm: rate-limit it or the XCB
+		 * poll loop crawls (t358) - a dropped connection is then
+		 * noticed within ~50ms of the next recv attempt */
+		static vlong lastprobe[16];
 		static int areg;
+		vlong now;
 		char probe;
 		long rr;
+		ulong b;
 
+		now = nsec();
+		if(now - lastprobe[i] < 50LL*1000*1000)
+			return -11;
+		lastprobe[i] = now;
 		if(!areg){
 			areg = 1;
 			atnotify(alarmnote, 1);
