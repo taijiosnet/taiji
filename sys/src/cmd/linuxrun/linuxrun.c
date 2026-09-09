@@ -688,6 +688,17 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 				 * returned the REQUESTED total and the
 				 * unsent bytes were lost forever */
 	}
+	{
+		static int zwv;
+		ulong want;
+
+		want = 0;
+		for(i = 0; i < cnt; i++)
+			want += v[i].len;
+		if(zwv++ < 30 && total != (long)want)
+			fprint(2, "linuxrun: PARTWRV p%d fd=%lux want=%lux got=%ld\n",
+				getpid(), fd, want, total);
+	}
 	return total;
 }
 
@@ -2510,6 +2521,16 @@ dosyscall(Ureg *ur)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
 			r = -Ebadf;
+		{
+			/* partial-write forensics: a request the guest
+			 * believes it sent but the pipe never delivered
+			 * leaves the WM waiting forever for its reply */
+			static int zw;
+
+			if(zw++ < 30 && r != (long)a3)
+				fprint(2, "linuxrun: PARTWR p%d fd=%lux want=%lux got=%ld\n",
+					getpid(), a1, a3, r);
+		}
 		break;
 	case 5:		/* open */
 		r = sysopen(a1, a2, ur->si);
