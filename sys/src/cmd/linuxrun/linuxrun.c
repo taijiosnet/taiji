@@ -577,16 +577,33 @@ static void sockpredrain(void);
 static long
 sockwr(int fd, void *buf, long n)
 {
-	long w;
+	long w, done;
 	char es[ERRMAX];
 
-	while((w = write(fd, buf, n)) < 0){
-		errstr(es, sizeof es);
-		if(strcmp(es, "interrupted") == 0)
-			continue;
-		return -1;
+	done = 0;
+	while(done < n){
+		while((w = write(fd, (char*)buf+done, n-done)) < 0){
+			errstr(es, sizeof es);
+			if(strcmp(es, "interrupted") == 0)
+				continue;
+			return -1;
+		}
+		if(w < n-done){
+			/* plan9 pipes can take partial blocks when their
+			 * queue fills: report it once (the fragment size
+			 * names the limit) and keep pushing - returning
+			 * the short count made Xorg flush one fragment
+			 * per dispatch cycle, trickling 3MB replies at
+			 * 32 bytes apiece */
+			static int zs;
+
+			if(zs++ < 10)
+				fprint(2, "linuxrun: SHORTWR p%d wrote %ld of %ld errstr=%s\n",
+					getpid(), w, n-done, es);
+		}
+		done += w;
 	}
-	return w;
+	return done;
 }
 static void sockopc(int, void*, long, int);
 static void dumpopc(void);
