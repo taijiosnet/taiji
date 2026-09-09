@@ -1109,7 +1109,7 @@ sockopc(int slot, void *buf, long n, int wr)
 	seq = ((uchar*)buf)[2] | (((uchar*)buf)[3]<<8);
 	/* sequence tracking: requests carry their seq at bytes 2-3,
 	 * replies and errors too (events do not - skip those) */
-	if(nseq < 150){
+	if(nseq < 900){
 		if(wr){
 			nseq++;
 			fprint(2, "linuxrun: SEQ p%d g%d wr op=%d seq=%d n=%ld",
@@ -1117,7 +1117,7 @@ sockopc(int slot, void *buf, long n, int wr)
 			/* the full request head for window-bearing ops: a
 			 * corrupted window ID in a reply draws BadWindow
 			 * downstream - the request names what it asked */
-			if(op == 3 || op == 20 || op == 14 || op == 15){
+			if(op == 3 || op == 20 || op == 14 || op == 15 || seq >= 60){
 				int qb;
 
 				fprint(2, " req:");
