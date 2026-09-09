@@ -1116,8 +1116,14 @@ sockopc(int slot, void *buf, long n, int wr)
 				getpid(), sockmap[slot][0], op, seq, n);
 		}else if(op <= 1 || (wr == 0 && n <= 2600)){
 			nseq++;
-			fprint(2, "linuxrun: SEQ p%d g%d rd op=%d seq=%d n=%ld\n",
+			fprint(2, "linuxrun: SEQ p%d g%d rd op=%d seq=%d n=%ld",
 				getpid(), sockmap[slot][0], op, seq, n);
+			if(op == 0 && n >= 8)
+				/* error reply: byte1 = code, byte2-3 = seq,
+				 * byte4-5 = minor, byte8 = major opcode */
+				fprint(2, " XERR code=%d maj=%d",
+					((uchar*)buf)[1], ((uchar*)buf)[8]);
+			fprint(2, "\n");
 		}
 	}
 	if(wr)
