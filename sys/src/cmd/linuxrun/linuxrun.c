@@ -1161,7 +1161,7 @@ sockopc(int slot, void *buf, long n, int wr)
 			setupdone[slot]++;
 			fprint(2, "linuxrun: SETUP p%d g%d n=%ld bytes:",
 				getpid(), sockmap[slot][0], n);
-			for(sb = 0; sb < 16 && sb < n; sb++)
+			for(sb = 0; sb < 80 && sb < n; sb++)
 				fprint(2, " %2.2ux", ((uchar*)buf)[sb]);
 			fprint(2, "\n");
 		}
