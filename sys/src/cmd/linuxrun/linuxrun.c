@@ -1616,55 +1616,15 @@ sockread(int gfd, void *buf, ulong n)
 	if(i >= 0 && soeof[i])
 		return 0;
 	if(i >= 0 && sockmap[i][3] && sockinready(gfd) <= 0){
-		/* the probe costs a 1ms alarm: rate-limit it or the XCB
-		 * poll loop crawls (t358) - a dropped connection is then
-		 * noticed within ~50ms of the next recv attempt */
-		static vlong lastprobe[16];
-		
-		vlong now;
-		char probe;
-		long rr;
-		ulong b;
-
-		now = nsec();
-		if(now - lastprobe[i] < 50LL*1000*1000)
-			return -11;
-		lastprobe[i] = now;
-		/* NEVER steal a real stream byte here: serving the
-		 * probe's 1-byte read duplicated bytes at chunk
-		 * boundaries (a 32-byte reply followed by a spurious
-		 * n=1 read), desyncing XCB's parser - the WM tore down
-		 * and retried its connection forever at the same split.
-		 * The probe only distinguishes dead from alive when the
-		 * pipe is empty; if data raced in, push it back via inq
-		 * so the stream stays byte-exact. */
-		probing = 1;
-		alarm(1);
-		rr = read(sockreadfd(gfd), &probe, 1);
-		alarm(0);
-		probing = 0;
-		USED(b);
-		if(rr == 1){
-			if(inq[i] == nil){
-				inq[i] = malloc(inqcap[i] ? inqcap[i] : 256);
-				if(inq[i] == nil)
-					inqcap[i] = 0;
-				else if(inqcap[i] < 256)
-					inqcap[i] = 256;
-			}
-			if(inq[i] != nil && inqn[i] < inqcap[i]){
-				memmove(inq[i]+1, inq[i], inqn[i]);
-				inq[i][0] = probe;
-				inqn[i]++;
-			}
-			return -11;		/* data arrived: retry the read
-					 * proper; the byte waits in inq */
-		}
-		if(rr == 0){
-			soeof[i] = 1;		/* peer closed: EOF, not EAGAIN */
-			return 0;
-		}
-		return -11;			/* interrupted: writer alive */
+		/* Plain EAGAIN for an empty nonblocking read: the old
+		 * alarm-probe variant interrupted its own blocked
+		 * 1-byte read and the resume at the ld.so stub's ret
+		 * trapped invalid-opcode, KILLING the caller (the WM
+		 * died exactly here after an EAGAIN recvmsg - every
+		 * retry ended this way).  EOF is still detected by the
+		 * blocking path below and the write-end checks in
+		 * poll/epoll. */
+		return -11;
 	}
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
