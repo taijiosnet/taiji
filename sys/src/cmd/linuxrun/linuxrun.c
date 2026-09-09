@@ -1382,9 +1382,24 @@ static int probing;
 static int
 alarmnote(void *v, char *msg)
 {
-	if(msg != nil && strcmp(msg, "alarm") == 0){
+	Ureg *ur;
+
+	if(msg == nil)
+		return 0;
+	if(strcmp(msg, "alarm") == 0){
 		if(probing)
 			alarm(1);
+		return 1;
+	}
+	if(strcmp(msg, "sample") == 0 && started && !forkpending){
+		/* the sampling profiler's poke: where is the guest now? */
+		static int zs;
+
+		ur = v;
+		if(zs++ < 40)
+			fprint(2, "linuxrun: SAMPLE p%d pc=%lux ax=%lux sp=%lux bx=%lux ret=%lux\n",
+				getpid(), ur->pc, ur->ax, ur->sp, ur->bx,
+				ur->sp > 0x10000 ? *(ulong*)ur->sp : 0);
 		return 1;
 	}
 	return 0;
@@ -1434,7 +1449,7 @@ sockread(int gfd, void *buf, ulong n)
 		 * poll loop crawls (t358) - a dropped connection is then
 		 * noticed within ~50ms of the next recv attempt */
 		static vlong lastprobe[16];
-		static int areg;
+		
 		vlong now;
 		char probe;
 		long rr;
@@ -1444,10 +1459,6 @@ sockread(int gfd, void *buf, ulong n)
 		if(now - lastprobe[i] < 50LL*1000*1000)
 			return -11;
 		lastprobe[i] = now;
-		if(!areg){
-			areg = 1;
-			atnotify(alarmnote, 1);
-		}
 		probing = 1;
 		alarm(1);
 		rr = read(sockreadfd(gfd), &probe, 1);
@@ -1516,10 +1527,21 @@ sysbindlisten(ulong path)
 		 * down and Xorg ends up accepting on a dangling
 		 * connection record - report success instead; clients
 		 * reach the pathname listener */
+		static int za;
+
+		if(za++ < 20)
+			fprint(2, "linuxrun: BINDABS p%d\n", getpid());
 		return 0;
 	}
 	strncpy(boundpath, (char*)path, sizeof boundpath - 1);
 	boundpath[sizeof boundpath - 1] = 0;
+	{
+		static int zb;
+
+		if(zb++ < 20)
+			fprint(2, "linuxrun: BIND p%d path=%s\n",
+				getpid(), boundpath);
+	}
 	/* clients queue connection requests at <path>.q; accept drains
 	 * that file, so a stale one from a previous server must go */
 	snprint(req, sizeof req, "%s.q", boundpath);
@@ -2120,6 +2142,20 @@ dosyscall(Ureg *ur)
 			}
 		}
 	}
+	{
+		/* enter-trace for blocking candidates only: a process
+		 * stuck in ONE blocking host call produces no further
+		 * output - the last line before the silence names the
+		 * culprit. Loader noise is excluded or the cap dies in
+		 * library loading. */
+		static int zent;
+
+		if(zent++ < 3000 &&
+		   (nr == 3 || nr == 4 || nr == 145 || nr == 146 ||
+		    nr == 168 || nr == 240 || nr == 422 || nr == 102))
+			fprint(2, "linuxrun: ENT p%d nr=%lux a1=%lux a2=%lux\n",
+				getpid(), nr, a1, a2);
+	}
 	sysring[sysri%32][0] = nr;
 	sysring[sysri%32][1] = a1;
 	sysring[sysri%32][2] = a2;
@@ -2404,6 +2440,13 @@ dosyscall(Ureg *ur)
 			if(a1 == 3){
 				*(ulong*)a2 = 8*1024*1024;
 				*(ulong*)(a2+4) = 8*1024*1024;
+			}else if(a1 == 7){
+				/* RLIMIT_NOFILE: infinite made glibc's
+				 * close-all-fds walk a million numbers
+				 * (dbus-daemon burned CPU forever on
+				 * --version before ever reaching main) */
+				*(ulong*)a2 = 1024;
+				*(ulong*)(a2+4) = 1024;
 			}else{
 				*(ulong*)a2 = 0x7fffffff;
 				*(ulong*)(a2+4) = 0x7fffffff;
@@ -3813,6 +3856,36 @@ mfd = open("/dev/mark", OWRITE);
 		fprint(2, "linuxrun: foreign mark failed: %r\n");
 
 	atnotify(traphandler, 1);
+	atnotify(alarmnote, 1);	/* alarm + sample notes, always armed */
+	/* sampling profiler: a RFMEM sibling pokes this proc with a
+	 * "sample" note every few seconds; the note handler prints the
+	 * interrupted guest pc.  User-mode busy loops make no syscalls,
+	 * so this is the only way to see where they spin (dbus-daemon
+	 * burns CPU forever even on --version, before main()). */
+	if(rfork(RFMEM|RFPROC) == 0){
+		char pb[16];
+		int pf, pn, pp;
+
+		pp = 0;
+		pf = open("#c/ppid", OREAD);
+		if(pf >= 0){
+			pn = readn(pf, pb, sizeof pb-1);
+			close(pf);
+			if(pn > 0){
+				pb[pn] = 0;
+				pp = strtol(pb, nil, 10);
+			}
+		}
+		for(;;){
+			sleep(2000);
+			if(pp > 0){
+				int sr;
+
+				sr = postnote(PNPROC, pp, "sample");
+				fprint(2, "linuxrun: SAMPLER p%d poke=%d\n", pp, sr);
+			}
+		}
+	}
 	f = (void(*)(void))trapinsn;
 	f();
 	fatal("returned from the guest");	/* not reached */
