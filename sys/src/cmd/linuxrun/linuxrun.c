@@ -1646,6 +1646,20 @@ sysconnect(ulong path)
 	snprint(target, sizeof target, "/srv/x.c.%d.%d.b", getpid(), connseq);
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
+	/* the target socket path: without it ANY listener's accept
+	 * would eat this ticket - the dbus daemon stole the X
+	 * server's clients and vice versa */
+	{
+		int tf;
+
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.t", getpid(), connseq);
+		tf = create(target, OWRITE|OTRUNC, 0666);
+		if(tf >= 0){
+			if(write(tf, (char*)path, strlen((char*)path)) < 0)
+				;
+			close(tf);
+		}
+	}
 	{
 		static int zk;
 
@@ -1743,6 +1757,27 @@ sysaccept(void)
 		cseq = s2;
 		if(s2 < 0 || q[0] != '.' || q[1] != 'a')
 			continue;	/* only the .a twin queues */
+		/* only tickets aimed at OUR socket: without this check any
+		 * listener ate any pending connect (the dbus daemon stole
+		 * the X server's clients) */
+		{
+			char tbuf[256], tpath[64];
+			int tf, tn, ok;
+
+			ok = 0;
+			snprint(tpath, sizeof tpath, "/srv/x.c.%d.%d.t", cpid, cseq);
+			tf = open(tpath, OREAD);
+			if(tf >= 0){
+				tn = readn(tf, tbuf, sizeof tbuf-1);
+				close(tf);
+				if(tn > 0){
+					tbuf[tn] = 0;
+					ok = strcmp(tbuf, boundpath) == 0;
+				}
+			}
+			if(!ok)
+				continue;
+		}
 		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
 			continue;
@@ -1758,6 +1793,8 @@ sysaccept(void)
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		remove(target);
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
+		remove(target);
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.t", cpid, cseq);
 		remove(target);
 		{
 			static int za;
@@ -1795,7 +1832,7 @@ listenqueued(void)
 		return 0;
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
 		char tgt[64];
-		int s2;
+		int s2, tf, tn, ok;
 
 		cpid = strtol(p+4, &q, 10);
 		if(cpid <= 0 || q[0] != '.')
@@ -1806,7 +1843,22 @@ listenqueued(void)
 		snprint(tgt, sizeof tgt, "x.c.%d.%d.b", cpid, s2);
 		if(memfind(buf, n, tgt) == nil)
 			continue;
-		return 1;
+		/* only tickets aimed at this listener (see sysaccept) */
+		ok = 0;
+		snprint(tgt, sizeof tgt, "/srv/x.c.%d.%d.t", cpid, s2);
+		tf = open(tgt, OREAD);
+		if(tf >= 0){
+			char tbuf[256];
+
+			tn = readn(tf, tbuf, sizeof tbuf-1);
+			close(tf);
+			if(tn > 0){
+				tbuf[tn] = 0;
+				ok = strcmp(tbuf, boundpath) == 0;
+			}
+		}
+		if(ok)
+			return 1;
 	}
 	return 0;
 }
