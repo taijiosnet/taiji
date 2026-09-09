@@ -3885,35 +3885,6 @@ mfd = open("/dev/mark", OWRITE);
 
 	atnotify(traphandler, 1);
 	atnotify(alarmnote, 1);	/* alarm + sample notes, always armed */
-	/* sampling profiler: a RFMEM sibling pokes this proc with a
-	 * "sample" note every few seconds; the note handler prints the
-	 * interrupted guest pc.  User-mode busy loops make no syscalls,
-	 * so this is the only way to see where they spin (dbus-daemon
-	 * burns CPU forever even on --version, before main()). */
-	if(rfork(RFMEM|RFPROC) == 0){
-		char pb[16];
-		int pf, pn, pp;
-
-		pp = 0;
-		pf = open("#c/ppid", OREAD);
-		if(pf >= 0){
-			pn = readn(pf, pb, sizeof pb-1);
-			close(pf);
-			if(pn > 0){
-				pb[pn] = 0;
-				pp = strtol(pb, nil, 10);
-			}
-		}
-		for(;;){
-			sleep(2000);
-			if(pp > 0){
-				int sr;
-
-				sr = postnote(PNPROC, pp, "sample");
-				fprint(2, "linuxrun: SAMPLER p%d poke=%d\n", pp, sr);
-			}
-		}
-	}
 	f = (void(*)(void))trapinsn;
 	f();
 	fatal("returned from the guest");	/* not reached */
