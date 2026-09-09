@@ -1731,8 +1731,13 @@ sysaccept(void)
 	int fd, n, cpid, cseq, rf, wf;
 	char *p;
 
-	if(boundpath[0] == 0)
+	if(boundpath[0] == 0){
+		static int ze;
+
+		if(ze++ < 4)
+			fprint(2, "linuxrun: ACCENTRY p%d noboundpath\n", getpid());
 		return -Ebadf;
+	}
 	/* scan /srv for the client's posted pipe ends: the entries are
 	 * kernel-global and listing never blocks, so this accept is
 	 * naturally nonblocking */
@@ -1744,6 +1749,14 @@ sysaccept(void)
 	if(n <= 0)
 		return -11;
 	buf[n] = 0;
+	{
+		static int zd;
+
+		if(zd++ < 4)
+			fprint(2, "linuxrun: ACCLIST p%d mine=%s srv=%.*s\n",
+				getpid(), boundpath,
+				n < 200 ? n : 200, buf);
+	}
 	/* the marshaled directory stream carries names as plain
 	 * strings: look for x.c.<pid>.<seq>.a with its .b twin */
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
@@ -3678,8 +3691,11 @@ dosyscall(Ureg *ur)
 		}else
 			r = -Einval;
 		break;
-	case 12:	/* chdir: the rootfs paths are host-absolute here */
-		r = chdir((char*)a1) < 0 ? -Enoent : 0;
+	case 12:	/* chdir: report success WITHOUT moving the host cwd -
+		 * a real chdir broke Xvfb's xkb lookups ("Failed to
+		 * activate virtual core keyboard") because the guest's
+		 * relative paths then resolved from the wrong root */
+		r = 0;
 		break;
 	case 332:	/* inotify_init1 */
 		{
