@@ -1225,7 +1225,74 @@ sockslot(int fd)
 
 	for(i = 0; i < NSOCK; i++)
 		if(sockmap[i][1] && sockmap[i][0] == fd)
-			return i;
+			break;
+	if(i < NSOCK){
+		/* STALE-HIT refresh: a thread may have re-registered this
+		 * fd number with NEW pipes (e.g. the WM's second X socket
+		 * landing on a number our copy still maps to the first
+		 * connection - its writes then exited through the wrong
+		 * pipe and the server never saw them).  The .f file
+		 * carries the live packed value; re-adopt when it moves.
+		 * Rate-limited like the miss path. */
+		static vlong lasth;
+		vlong now;
+		char nb[64];
+		int key, ff, s3;
+		ulong live;
+
+		now = nsec();
+		if(now - lasth > 100LL*1000*1000){
+			lasth = now;
+			key = guestprocid ? (int)guestprocid : getpid();
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
+			if((ff = open(nb, OREAD)) >= 0){
+				char fb[64];
+				int fn;
+				ulong fl2;
+
+				fn = readn(ff, fb, sizeof fb-1);
+				close(ff);
+				if(fn > 0){
+					char *fp;
+
+					fb[fn] = 0;
+					fl2 = 0;
+					live = 0;
+					fp = fb;
+					while(*fp == ' ')
+						fp++;
+					while(*fp >= '0' && *fp <= '9')
+						fl2 = fl2*10 + *fp++ - '0';
+					while(*fp == ' ')
+						fp++;
+					while(*fp >= '0' && *fp <= '9')
+						live = live*10 + *fp++ - '0';
+					if(live != 0 && live != sockmap[i][2]){
+						int rf2, wf2;
+
+						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
+						rf2 = open(nb, OREAD);
+						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
+						wf2 = open(nb, OWRITE);
+						if(rf2 >= 0 && wf2 >= 0){
+							fprint(2, "linuxrun: READOPT p%d fd=%d %lux -> %lux\n",
+								getpid(), fd, sockmap[i][2], live);
+							close(sockmap[i][2] >> 16);
+							close(sockmap[i][2] & 0xffff);
+							sockmap[i][2] = (rf2<<16) | wf2;
+							sockmap[i][3] = fl2;
+							soeof[i] = 0;
+							inqn[i] = 0;
+						}else{
+							if(rf2 >= 0) close(rf2);
+							if(wf2 >= 0) close(wf2);
+						}
+					}
+				}
+			}
+		}
+		return i;
+	}
 	/* Leader processes adopt too: a connection an eventfd-like
 	 * stand-in or socket created by one of OUR threads is unknown
 	 * here, and an unknown fd in epoll is reported always-ready -
@@ -1337,7 +1404,7 @@ sockmapfd(int fd, ulong packed)
 		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
 		pf = create(nb, OWRITE|OTRUNC, 0666);
 		if(pf >= 0){
-			fprint(pf, "0");
+			fprint(pf, "0 %lux", packed);
 			close(pf);
 		}
 	}
@@ -1388,7 +1455,7 @@ socknewslot(ulong packed)
 			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
 			pf = create(nb, OWRITE|OTRUNC, 0666);
 			if(pf >= 0){
-				fprint(pf, "0");
+				fprint(pf, "0 %lux", packed);
 				close(pf);
 			}
 		}
