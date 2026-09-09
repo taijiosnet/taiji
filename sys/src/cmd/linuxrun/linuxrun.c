@@ -1818,7 +1818,7 @@ sysaccept(void)
 			/* the client's write end, taken through /proc: the
 			 * /srv OWRITE open provably does not share the pipe
 			 * channel (qid mismatch) - /proc/<pid>/fd/N does */
-			snprint(mpath, sizeof mpath, "/proc/%d/fd/%d", cpid, cwfd);
+			snprint(mpath, sizeof mpath, "#p/%d/fd/%d", cpid, cwfd);
 			wf = open(mpath, ORDWR);
 			if(wf < 0)
 				wf = open(mpath, OWRITE);
