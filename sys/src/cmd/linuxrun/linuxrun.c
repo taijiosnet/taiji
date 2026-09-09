@@ -1630,21 +1630,35 @@ sockread(int gfd, void *buf, ulong n)
 		if(now - lastprobe[i] < 50LL*1000*1000)
 			return -11;
 		lastprobe[i] = now;
+		/* NEVER steal a real stream byte here: serving the
+		 * probe's 1-byte read duplicated bytes at chunk
+		 * boundaries (a 32-byte reply followed by a spurious
+		 * n=1 read), desyncing XCB's parser - the WM tore down
+		 * and retried its connection forever at the same split.
+		 * The probe only distinguishes dead from alive when the
+		 * pipe is empty; if data raced in, push it back via inq
+		 * so the stream stays byte-exact. */
 		probing = 1;
 		alarm(1);
 		rr = read(sockreadfd(gfd), &probe, 1);
 		alarm(0);
 		probing = 0;
+		USED(b);
 		if(rr == 1){
-			/* the probe byte is real data: serve it directly -
-			 * inq[i] may never have been allocated (a socket
-			 * that sockdrain never saw) and writing through a
-			 * nil pointer here killed client and server alike
-			 * (fault write addr=0x0, pc in the probe) */
-			b = n < 1 ? n : 1;
-			memmove(buf, &probe, b);
-			sockopc(i, buf, b, 0);
-			return b;
+			if(inq[i] == nil){
+				inq[i] = malloc(inqcap[i] ? inqcap[i] : 256);
+				if(inq[i] == nil)
+					inqcap[i] = 0;
+				else if(inqcap[i] < 256)
+					inqcap[i] = 256;
+			}
+			if(inq[i] != nil && inqn[i] < inqcap[i]){
+				memmove(inq[i]+1, inq[i], inqn[i]);
+				inq[i][0] = probe;
+				inqn[i]++;
+			}
+			return -11;		/* data arrived: retry the read
+					 * proper; the byte waits in inq */
 		}
 		if(rr == 0){
 			soeof[i] = 1;		/* peer closed: EOF, not EAGAIN */
