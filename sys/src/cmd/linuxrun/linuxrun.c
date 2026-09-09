@@ -1559,9 +1559,9 @@ postsrvfd(char *name, int fd)
 
 		d = dirfstat(fd);
 		if(zp++ < 12)
-			fprint(2, "linuxrun: POST p%d %s fd=%d q=%llux.%llux\n",
+			fprint(2, "linuxrun: POST p%d %s fd=%d q=%llux.%lux\n",
 				getpid(), name, fd,
-				d ? d->qid.path : 0, d ? d->qid.vers : 0);
+				d ? (vlong)d->qid.path : 0, d ? (ulong)d->qid.vers : 0);
 		free(d);
 	}
 	if(write(sfd, buf, strlen(buf)) < 0){
@@ -1687,10 +1687,10 @@ sysconnect(ulong path)
 		dc = dirfstat(c2s[0]);
 		dd = dirfstat(s2c[1]);
 		if(zk++ < 10)
-			fprint(2, "linuxrun: CONNECT p%d queued %s a=%llux.%llux b=%llux.%llux\n",
+			fprint(2, "linuxrun: CONNECT p%d queued %s a=%llux.%lux b=%llux.%lux\n",
 				getpid(), (char*)path,
-				dc ? dc->qid.path : 0, dc ? dc->qid.vers : 0,
-				dd ? dd->qid.path : 0, dd ? dd->qid.vers : 0);
+				dc ? (vlong)dc->qid.path : 0, dc ? (ulong)dc->qid.vers : 0,
+				dd ? (vlong)dd->qid.path : 0, dd ? (ulong)dd->qid.vers : 0);
 		free(dc);
 		free(dd);
 	}
@@ -1869,10 +1869,10 @@ sysaccept(void)
 			dr = dirfstat(rf);
 			dw = dirfstat(wf);
 			if(za++ < 40)
-				fprint(2, "linuxrun: ACCEPT p%d client=%d seq=%d rf=%d wf=%d r=%llux.%llux w=%llux.%llux\n",
+				fprint(2, "linuxrun: ACCEPT p%d client=%d seq=%d rf=%d wf=%d r=%llux.%lux w=%llux.%lux\n",
 					getpid(), cpid, cseq, rf, wf,
-					dr ? dr->qid.path : 0, dr ? dr->qid.vers : 0,
-					dw ? dw->qid.path : 0, dw ? dw->qid.vers : 0);
+					dr ? (vlong)dr->qid.path : 0, dr ? (ulong)dr->qid.vers : 0,
+					dw ? (vlong)dw->qid.path : 0, dw ? (ulong)dw->qid.vers : 0);
 			free(dr);
 			free(dw);
 		}
