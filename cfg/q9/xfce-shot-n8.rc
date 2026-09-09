@@ -1,0 +1,24 @@
+#!/bin/rc
+# diagnose the xfwm4 helper-dialog stall: dump /proc syscall states
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+sleep 240
+echo xfwm4-phase
+ps
+echo procsys
+for(d in /proc/[0-9]*) {
+	if(test -f $d^/args) {
+		echo PROC $d
+		cat $d^/args
+		echo syscall:
+		cat $d^/syscall
+	}
+}
+echo xfce-shot-done

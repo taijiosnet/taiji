@@ -1,0 +1,23 @@
+#!/bin/rc
+{
+	echo '<busconfig>'
+	echo '  <type>session</type>'
+	echo '  <listen>unix:path=/tmp/dbus-1</listen>'
+	echo '  <auth>EXTERNAL</auth>'
+	echo '  <policy context="default">'
+	echo '    <allow send_destination="*"/>'
+	echo '    <allow receive_sender="*"/>'
+	echo '    <allow own="*"/>'
+	echo '  </policy>'
+	echo '</busconfig>'
+} > /debian/rootfs/tmp/dbus.conf
+echo dbus-version-test
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --version' &
+sleep 30
+echo dbus-version-done
+echo dbus-fork-test
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 45
+echo dbus-fork-done
+ps
+echo dbus-test-done
