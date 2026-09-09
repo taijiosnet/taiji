@@ -1759,6 +1759,16 @@ sysaccept(void)
 		remove(target);
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
 		remove(target);
+		{
+			static int za;
+
+			/* the server<->client map: which guest proc is on
+			 * which bridge pair, so reply writes can be traced
+			 * to the client they belong to */
+			if(za++ < 40)
+				fprint(2, "linuxrun: ACCEPT p%d client=%d seq=%d rf=%d wf=%d\n",
+					getpid(), cpid, cseq, rf, wf);
+		}
 		return (rf<<16) | wf;
 	}
 	return -11;	/* -EAGAIN */
@@ -3570,6 +3580,40 @@ dosyscall(Ureg *ur)
 	case 94:	/* setgroups */
 	case 291:	/* inotify_init: no events are ever reported, so a
 			 * quiet placeholder fd satisfies GLib monitors */
+	case 340:	/* splice(fd_in, off_in, fd_out, off_out, len, flags):
+			 * dbus's remaining ENOSYS.  A pipe-to-pipe move in
+			 * one bounded chunk is enough for the callers here;
+			 * blocking matches splice-on-pipe semantics */
+		if(a1 < 0x10000UL && a4 < 0x10000UL && a5 > 0){
+			char sb[32*1024];
+			long got, want;
+
+			want = a5 > sizeof sb ? sizeof sb : a5;
+			got = read((int)a1, sb, want);
+			if(got < 0)
+				r = -Ebadf;
+			else if(got == 0)
+				r = 0;
+			else{
+				long put;
+
+				put = 0;
+				while(put < got){
+					long w;
+
+					w = write((int)a4, sb+put, got-put);
+					if(w <= 0)
+						break;
+					put += w;
+				}
+				r = put;
+			}
+		}else
+			r = -Einval;
+		break;
+	case 12:	/* chdir: the rootfs paths are host-absolute here */
+		r = chdir((char*)a1) < 0 ? -Enoent : 0;
+		break;
 	case 332:	/* inotify_init1 */
 		{
 			int p[2];
