@@ -641,7 +641,7 @@ static long
 syswritev(ulong fd, ulong iov, ulong cnt)
 {
 	struct Liovec *v;
-	long total, n;
+	long total;
 	int slot;
 	ulong i;
 
@@ -653,14 +653,23 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 	if(cnt > 0 && v[0].len > 0)
 		sockopc(slot, v[0].base, v[0].len, 1);
 	total = 0;
-	for(i = 0; i < cnt; i++)
-		total += v[i].len;
 	for(i = 0; i < cnt; i++){
+		long n;
+
 		if(v[i].len == 0)
 			continue;
 		n = sockwr((int)fd, v[i].base, v[i].len);
-		if(n < 0)
+		if(n < 0){
+			if(total > 0)
+				break;	/* report the partial write */
 			return -Ebadf;
+		}
+		total += n;
+		if(n < (long)v[i].len)
+			break;	/* short write: report it, the guest
+				 * buffers the rest - the old code
+				 * returned the REQUESTED total and the
+				 * unsent bytes were lost forever */
 	}
 	return total;
 }
