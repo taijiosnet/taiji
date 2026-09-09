@@ -1553,6 +1553,17 @@ postsrvfd(char *name, int fd)
 	if(sfd < 0){
 			return -1;
 	}
+	{
+		static int zp;
+		Dir *d;
+
+		d = dirfstat(fd);
+		if(zp++ < 12)
+			fprint(2, "linuxrun: POST p%d %s fd=%d q=%llux.%llux\n",
+				getpid(), name, fd,
+				d ? d->qid.path : 0, d ? d->qid.vers : 0);
+		free(d);
+	}
 	if(write(sfd, buf, strlen(buf)) < 0){
 		close(sfd);
 		return -1;
