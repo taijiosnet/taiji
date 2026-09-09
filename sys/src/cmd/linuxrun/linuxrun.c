@@ -814,6 +814,17 @@ sysopen(ulong path, ulong flags, ulong mode)
 			fprint(2, "linuxrun: open %s: %r\n", p);
 		return -Enoent;
 	}
+	{
+		/* fd identity trace: the frozen dbus-daemon's last calls
+		 * were read(fd=7)/read(fd=8) - name what each fd is so a
+		 * stall scene identifies its file (ufs EOF hang vs own
+		 * wakeup pipe) instantly */
+		static int zo;
+
+		if(zo++ < 200)
+			fprint(2, "linuxrun: OPEN p%d fd=%d %s\n",
+				getpid(), fd, p);
+	}
 	return fd;
 }
 
