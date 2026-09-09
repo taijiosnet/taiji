@@ -1113,8 +1113,8 @@ sockopc(int slot, void *buf, long n, int wr)
 	if(nseq < 900){
 		if(wr){
 			nseq++;
-			fprint(2, "linuxrun: SEQ p%d g%d wr op=%d seq=%d n=%ld",
-				getpid(), sockmap[slot][0], op, seq, n);
+			fprint(2, "linuxrun: SEQ p%d g%d s%d wr op=%d seq=%d n=%ld",
+				getpid(), sockmap[slot][0], slot, op, seq, n);
 			/* the full request head for window-bearing ops: a
 			 * corrupted window ID in a reply draws BadWindow
 			 * downstream - the request names what it asked */
@@ -1128,8 +1128,8 @@ sockopc(int slot, void *buf, long n, int wr)
 			fprint(2, "\n");
 		}else if(op <= 1 || (wr == 0 && n <= 2600)){
 			nseq++;
-			fprint(2, "linuxrun: SEQ p%d g%d rd op=%d seq=%d n=%ld",
-				getpid(), sockmap[slot][0], op, seq, n);
+			fprint(2, "linuxrun: SEQ p%d g%d s%d rd op=%d seq=%d n=%ld",
+				getpid(), sockmap[slot][0], slot, op, seq, n);
 			if(op == 0 && n >= 8)
 				/* error reply: byte1 = code, byte2-3 = seq,
 				 * byte4-5 = minor, byte8 = major opcode */
