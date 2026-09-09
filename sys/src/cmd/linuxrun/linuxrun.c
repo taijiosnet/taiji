@@ -1031,15 +1031,18 @@ sockdrain(int i)
 }
 
 /* drain every readable bridge pipe: called before a guest write can
- * block, so the peer's stuck write always finds room */
+ * block, so the peer's stuck write always finds room.
+ *
+ * DISARMED: plan9 pipes have no limit, so writes never block - but
+ * this drain pulled up to 1MB of replies into the WRITING process'
+ * inq, stealing bytes that belonged to another thread's pending read
+ * on the same shared connection (CLONE_FILES threads are separate
+ * host procs here).  xfwm4's threaded xfconf property sync hit this
+ * constantly: one thread's ChangeProperty pre-drained the other
+ * thread's GetProperty reply and everything stalled.  */
 static void
 sockpredrain(void)
 {
-	int i;
-
-	for(i = 0; i < NSOCK; i++)
-		if(sockmap[i][1] && sockrawqlen(i) > 0)
-			sockdrain(i);
 }
 /* X-protocol forensics: first byte of every write (request opcode) and
  * read (event/reply type) through a bridge socket, counted per slot */
@@ -3026,12 +3029,12 @@ dosyscall(Ureg *ur)
 						fprint(2, " %lux", ((ulong*)ur->sp)[k2]);
 					/* the unread-data theory: a reply nobody
 					 * reads keeps the fd readable forever;
-					 * peek its first bytes (X protocol) */
+					 * report pending bytes WITHOUT draining
+					 * (draining here steals them from the
+					 * thread they belong to) */
 					for(k2 = 0; k2 < (long)a2 && k2 < 6; k2++){
 						qi = sockslot(pf[k2].fd);
 						if(qi >= 0 && (pf[k2].revents & 1)){
-							if(inqn[qi] == 0)
-								sockdrain(qi);
 							if(inqn[qi] > 0){
 								int qb, qn;
 
