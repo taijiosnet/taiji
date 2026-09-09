@@ -1628,8 +1628,14 @@ sysconnect(ulong path)
 		return -111;
 	/* the .req file existing is the server's bind mark */
 	snprint(buf, sizeof buf, "%s.req", (char*)path);
-	if(access(buf, AEXIST) < 0)
+	if(access(buf, AEXIST) < 0){
+		static int zc;
+
+		if(zc++ < 10)
+			fprint(2, "linuxrun: CONNECT p%d refused %s (no .req)\n",
+				getpid(), (char*)path);
 		return -Enoent;
+	}
 	if(pipe(c2s) < 0 || pipe(s2c) < 0)
 		return -Enomem;
 	/* server reads what we write: publish c2s[0]; it writes back on
@@ -1640,6 +1646,13 @@ sysconnect(ulong path)
 	snprint(target, sizeof target, "/srv/x.c.%d.%d.b", getpid(), connseq);
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
+	{
+		static int zk;
+
+		if(zk++ < 10)
+			fprint(2, "linuxrun: CONNECT p%d queued %s\n",
+				getpid(), (char*)path);
+	}
 	connseq++;
 	/* the two /srv posts ARE the queue: the (nonblocking)
 	 * accept scans /srv for pending x.c.<pid>.<seq>.a entries */
