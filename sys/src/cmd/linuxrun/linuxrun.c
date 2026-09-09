@@ -1226,14 +1226,22 @@ sockslot(int fd)
 	for(i = 0; i < NSOCK; i++)
 		if(sockmap[i][1] && sockmap[i][0] == fd)
 			return i;
-	if(forkppid > 0){
+	/* Leader processes adopt too: a connection an eventfd-like
+	 * stand-in or socket created by one of OUR threads is unknown
+	 * here, and an unknown fd in epoll is reported always-ready -
+	 * dbus-daemon's leader spun on its thread-made eventfds that
+	 * way and froze in the blocking read.  (socksync consults the
+	 * parent, no-op for leaders; the /srv adoption below is keyed
+	 * by guestprocid, shared by the whole thread group.) */
+	{
 		static vlong last;
 		vlong now;
 
 		now = nsec();
 		if(now - last > 100LL*1000*1000){
 			last = now;
-			socksync();
+			if(forkppid > 0)
+				socksync();
 			for(i = 0; i < NSOCK; i++)
 				if(sockmap[i][1] && sockmap[i][0] == fd)
 					return i;
