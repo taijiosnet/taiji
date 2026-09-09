@@ -3852,6 +3852,16 @@ dosyscall(Ureg *ur)
 			fprint(2, "linuxrun: SETID p%d nr=%lux(%ld) a1=%lux -> %ld\n",
 				getpid(), nr, nr, a1, r);
 	}
+	{
+		/* any failing syscall: one line each (capped) - hidden
+		 * EINVALs from stubs otherwise masquerade as app errors
+		 * ('Failed to get fd limit: Invalid argument') */
+		static int ze;
+
+		if(r < 0 && ze++ < 60)
+			fprint(2, "linuxrun: SYSERR p%d nr=%lux a1=%lux a2=%lux a3=%lux a4=%lux -> %ld\n",
+				getpid(), nr, a1, a2, a3, a4, r);
+	}
 	return r;
 }
 
