@@ -2675,7 +2675,12 @@ dosyscall(Ureg *ur)
 						getpid(), (int)a1, (long)a4, n);
 					for(zi = 0; zi < Maxep && zn < 10; zi++){
 						if(eptab[zi].epfd == (int)a1){
-							fprint(2, " %d", (int)eptab[zi].fd);
+							int qs;
+
+							qs = sockslot((int)eptab[zi].fd);
+							fprint(2, " %d(q%lux)",
+								(int)eptab[zi].fd,
+								qs >= 0 ? sockrawqlen(qs) : 0xffff);
 							zn++;
 						}
 					}
