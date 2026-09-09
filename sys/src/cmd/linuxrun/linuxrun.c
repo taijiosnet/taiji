@@ -1119,7 +1119,7 @@ sockopc(int slot, void *buf, long n, int wr)
 			/* the full request head for window-bearing ops: a
 			 * corrupted window ID in a reply draws BadWindow
 			 * downstream - the request names what it asked */
-			if(op == 3 || op == 20 || op == 14 || op == 15 || op >= 128 || seq >= 60){
+			if(op == 2 || op == 3 || op == 20 || op == 14 || op == 15 || op >= 128 || seq >= 60){
 				int qb;
 
 				fprint(2, " req:");
