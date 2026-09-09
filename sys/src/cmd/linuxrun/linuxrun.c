@@ -1026,7 +1026,8 @@ int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
  * deadlock cannot form, and plan9 needs no nonblocking write. */
 uchar *inq[NSOCK];
 int soeof[NSOCK];	/* peer closed its end (read gave EOF) */
-int gifseq[NSOCK];	/* pending GetInputFocus (op 43) request seq, for the None->PointerRoot reply rewrite */
+int gifseq[NSOCK];
+int setupdone[NSOCK];	/* pending GetInputFocus (op 43) request seq, for the None->PointerRoot reply rewrite */
 ulong inqn[NSOCK], inqcap[NSOCK];
 
 static ulong
@@ -1150,6 +1151,25 @@ sockopc(int slot, void *buf, long n, int wr)
 	if(wr){
 		if(op == 43 && slot >= 0 && slot < NSOCK)
 			gifseq[slot] = seq;
+		/* first write per socket = the connection setup reply;
+		 * the first screen's ROOT WINDOW sits after vendor +
+		 * pixmap formats - dump it to see whether retries ever
+		 * see root=0 (the WM's final tree scan queried None) */
+		if(slot >= 0 && slot < NSOCK && setupdone[slot] == 0 &&
+		   n >= 64 && ((uchar*)buf)[0] == 1){
+			int sb, rootoff;
+			int vendor, formats;
+
+			vendor = ((uchar*)buf)[16] | (((uchar*)buf)[17]<<8);
+			formats = ((uchar*)buf)[21];
+			rootoff = 40 + ((vendor+3)&~3) + 8*formats;
+			setupdone[slot] = 1;
+			fprint(2, "linuxrun: SETUP p%d g%d n=%ld root@+%d =",
+				getpid(), sockmap[slot][0], n, rootoff);
+			for(sb = 0; sb < 4 && rootoff+sb < n; sb++)
+				fprint(2, " %2.2ux", ((uchar*)buf)[rootoff+sb]);
+			fprint(2, "\n");
+		}
 		wopc[slot][op]++;
 	}
 	else
