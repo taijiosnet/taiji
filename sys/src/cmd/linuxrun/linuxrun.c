@@ -3314,6 +3314,33 @@ dosyscall(Ureg *ur)
 					tleft = 0;
 					continue;
 				}
+				{
+					static int zpb;
+
+					/* a poll still empty after its first
+					 * slice: name the fds it waits on and
+					 * their real state - the WM's final
+					 * block lives here somewhere */
+					if(zpb++ < 30){
+						long k2;
+
+						fprint(2, "linuxrun: PBLOCK p%d to=%ld:",
+							getpid(), (long)a3);
+						for(k2 = 0; k2 < (long)a2 && k2 < 6; k2++){
+							Dir *d;
+							ulong ql;
+
+							ql = 0;
+							if((d = dirfstat(pf[k2].fd)) != nil){
+								ql = d->length;
+								free(d);
+							}
+							fprint(2, " %d/%ux/q%lux",
+								pf[k2].fd, pf[k2].events, ql);
+						}
+						fprint(2, "\n");
+					}
+				}
 				sleep(20);
 				if(tleft > 0)
 					tleft -= 20;
