@@ -2568,6 +2568,26 @@ dosyscall(Ureg *ur)
 		if(r < 0)
 			r = -Ebadf;
 		{
+			/* the WM's last act before idling is a write to
+			 * stderr whose content went unlogged - it names
+			 * what stopped it before the tree scan */
+			static int zs;
+
+			if(zs++ < 60 && (a1 == 2 || a1 == 1 || a1 == 0xb) && a3 < 512){
+				int sb;
+
+				fprint(2, "linuxrun: ERRWR p%d fd=%lux:", getpid(), a1);
+				for(sb = 0; sb < a3; sb++){
+					uchar c = ((uchar*)a2)[sb];
+					if(c >= 0x20 && c < 0x7f)
+						fprint(2, "%c", c);
+					else
+						fprint(2, ".");
+				}
+				fprint(2, "\n");
+			}
+		}
+		{
 			/* partial-write forensics: a request the guest
 			 * believes it sent but the pipe never delivered
 			 * leaves the WM waiting forever for its reply */
