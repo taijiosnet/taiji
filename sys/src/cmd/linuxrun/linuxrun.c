@@ -2478,6 +2478,23 @@ dosyscall(Ureg *ur)
 	case 146:	/* writev */
 		r = syswritev(a1, a2, a3);
 		break;
+	case 341:	/* prlimit64(pid, resource, new_rlim, old_rlim): dbus-daemon
+		 * reads its fd limit through this and aborted the step with
+		 * "Failed to get fd limit: Function not implemented" */
+		if(a4 != 0 && a4 > 0x10000){
+			if(a2 == 3){
+				*(ulong*)a4 = 8*1024*1024;
+				*(ulong*)(a4+4) = 8*1024*1024;
+			}else if(a2 == 7){
+				*(ulong*)a4 = 1024;
+				*(ulong*)(a4+4) = 1024;
+			}else{
+				*(ulong*)a4 = 0x7fffffff;
+				*(ulong*)(a4+4) = 0x7fffffff;
+			}
+		}
+		r = 0;
+		break;
 	case 76:	/* getrlimit */
 	case 191:	/* ugetrlimit: fill in an infinite rlimit - except
 			 * RLIMIT_STACK (resource 3): glibc derives the
