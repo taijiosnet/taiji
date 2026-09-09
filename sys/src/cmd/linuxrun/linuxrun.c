@@ -1970,7 +1970,25 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 15:	/* getsockopt: report success with a zeroed optval -
 			 * Xlib polls POLLOUT then reads SO_ERROR to learn
-			 * whether a nonblocking connect finished */
+			 * whether a nonblocking connect finished.
+			 * SO_PEERCRED (opt 17) needs real ucred {pid,uid,gid}:
+			 * dbus's EXTERNAL SASL auth validates the peer uid
+			 * through it and timed the connection out when the
+			 * handshake never completed */
+		if(a[2] == 17 && a[3] > 0x10000){
+			static int zp;
+
+			*(int*)a[3] = guestprocid ? (int)guestprocid : getpid();
+			*(int*)(a[3]+4) = 0;
+			*(int*)(a[3]+8) = 0;
+			if(a[4] > 0x10000)
+				*(int*)a[4] = 12;
+			if(zp++ < 10)
+				fprint(2, "linuxrun: PEERCRED p%d -> pid=%d uid=0\n",
+					getpid(), *(int*)a[3]);
+			r = 0;
+			break;
+		}
 		if(a[3] > 0x10000)
 			*(int*)a[3] = 0;
 		if(a[4] > 0x10000)
@@ -3167,7 +3185,23 @@ dosyscall(Ureg *ur)
 		break;
 	case 365:	/* getsockopt (direct): args are fd, level, optname,
 			 * optval, optlen - optval/a4 is the only pointer
-			 * worth writing, optlen/a5 gets its size */
+			 * worth writing, optlen/a5 gets its size.
+			 * SO_PEERCRED (optname a3==17) carries ucred for
+			 * dbus's EXTERNAL auth - see the socketcall twin */
+		if(a3 == 17 && a4 > 0x10000){
+			static int zq;
+
+			*(int*)a4 = guestprocid ? (int)guestprocid : getpid();
+			*(int*)(a4+4) = 0;
+			*(int*)(a4+8) = 0;
+			if(a5 > 0x10000)
+				*(int*)a5 = 12;
+			if(zq++ < 10)
+				fprint(2, "linuxrun: PEERCRED p%d -> pid=%d uid=0\n",
+					getpid(), *(int*)a4);
+			r = 0;
+			break;
+		}
 		if(a4 > 0x10000)
 			*(int*)a4 = 0;
 		if(a5 > 0x10000)
