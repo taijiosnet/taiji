@@ -3655,8 +3655,36 @@ traphandler(void *v, char *msg)
 		return 0;
 	}
 	pc = (uchar*)ur->pc;
-	if(pc[0] != 0x0f || pc[1] != 0x0b)
+	if(pc[0] != 0x0f || pc[1] != 0x0b){
+		/* an invalid opcode that is not our ud2 syscall gate: the
+		 * guest jumped to garbage (dbus-daemon died this way at
+		 * pc=0xe70a with nothing but the suicide note).  Dump the
+		 * scene before the default disposition takes the process */
+		if(started){
+			ulong *stk;
+			int i;
+
+			fprint(2, "linuxrun: guest UD pc=%lux sp=%lux trap=%lux\n",
+				ur->pc, ur->sp, ur->trap);
+			fprint(2, "linuxrun: ax=%lux bx=%lux cx=%lux dx=%lux si=%lux di=%lux bp=%lux\n",
+				ur->ax, ur->bx, ur->cx, ur->dx, ur->si, ur->di, ur->bp);
+			for(i = 0; i < 32; i++){
+				int ri;
+
+				ri = (sysri+i) % 32;
+				if(sysring[ri][0] != 0)
+					fprint(2, "linuxrun:  sys-%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
+						i, sysring[ri][0], sysring[ri][1], sysring[ri][2], sysring[ri][3]);
+			}
+			dumpsegments();
+			if(ur->sp > 0x10000 && ur->sp < 0x70000000){
+				stk = (ulong*)ur->sp;
+				for(i = 0; i < 16; i++)
+					fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);
+			}
+		}
 		return 0;
+	}
 	if(!started){
 		started = 1;
 		guestprocid = getpid();
