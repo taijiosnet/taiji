@@ -1655,6 +1655,17 @@ sockread(int gfd, void *buf, ulong n)
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
 		sockopc(sockslot(gfd), buf, i, 0);
+	if(i > 0 && sockslot(gfd) >= 0 && sockslot(gfd) < NSOCK &&
+	   setupdone[sockslot(gfd)] < 12){
+		int rb;
+
+		setupdone[sockslot(gfd)]++;
+		fprint(2, "linuxrun: RD10 p%d g%d n=%d bytes:",
+			getpid(), sockmap[sockslot(gfd)][0], (int)i);
+		for(rb = 0; rb < 16 && rb < i; rb++)
+			fprint(2, " %2.2ux", ((uchar*)buf)[rb]);
+		fprint(2, "\n");
+	}
 	/* GetInputFocus reply: 01 00 seq2 revert-to(1) pad focus(4)@8.
 	 * Xvfb answers focus=None when no WM has set focus yet; real
 	 * servers commonly hand back PointerRoot here, and gdk's
