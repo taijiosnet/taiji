@@ -1161,7 +1161,7 @@ sockopc(int slot, void *buf, long n, int wr)
 			int vendor, formats;
 
 			vendor = ((uchar*)buf)[24] | (((uchar*)buf)[25]<<8);
-			formats = ((uchar*)buf)[30] | (((uchar*)buf)[31]<<8);
+			formats = ((uchar*)buf)[29];
 			rootoff = 32 + 8*formats + ((vendor+3)&~3);
 			setupdone[slot] = 1;
 			fprint(2, "linuxrun: SETUP p%d g%d n=%ld root@+%d =",
