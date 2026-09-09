@@ -1650,15 +1650,20 @@ sysconnect(ulong path)
 	/* the target socket marker: NOT in /srv - devsrv files are
 	 * fd-sharing entries, readers get a dup of the writer's fd
 	 * instead of the content.  The marker sits beside the server's
-	 * .req file (a plain rootfs file): its existence IS the match */
+	 * .req file (a plain rootfs file); its content is the client's
+	 * s2c[1] fd number, which the acceptor opens through
+	 * /proc/<pid>/fd/N - the /srv OWRITE open provably does NOT
+	 * share the pipe channel (qid mismatch, replies vanished) */
 	{
 		int tf;
 		char mbuf[384];
 
 		snprint(mbuf, sizeof mbuf, "%s.t.%d.%d", (char*)path, getpid(), connseq);
 		tf = create(mbuf, OWRITE|OTRUNC, 0666);
-		if(tf >= 0)
+		if(tf >= 0){
+			fprint(tf, "%d", s2c[1]);
 			close(tf);
+		}
 	}
 	{
 		static int zk;
@@ -1786,11 +1791,21 @@ sysaccept(void)
 		 * the X server's clients).  The client drops a plain-file
 		 * marker beside its target: <path>.t.<pid>.<seq> */
 		{
-			char mpath[384];
-			int ok;
+			char mpath[384], mbuf[64];
+			int ok, mf, mn, cwfd;
 
 			snprint(mpath, sizeof mpath, "%s.t.%d.%d", boundpath, cpid, cseq);
-			ok = access(mpath, AEXIST) >= 0;
+			ok = 0;
+			cwfd = -1;
+			if((mf = open(mpath, OREAD)) >= 0){
+				mn = readn(mf, mbuf, sizeof mbuf-1);
+				close(mf);
+				if(mn > 0){
+					mbuf[mn] = 0;
+					cwfd = strtol(mbuf, nil, 10);
+					ok = cwfd > 2;
+				}
+			}
 			if(!ok){
 				static int zm;
 
@@ -1800,22 +1815,28 @@ sysaccept(void)
 				continue;
 			}
 			remove(mpath);	/* consume with the ticket */
+			/* the client's write end, taken through /proc: the
+			 * /srv OWRITE open provably does not share the pipe
+			 * channel (qid mismatch) - /proc/<pid>/fd/N does */
+			snprint(mpath, sizeof mpath, "/proc/%d/fd/%d", cpid, cwfd);
+			wf = open(mpath, ORDWR);
+			if(wf < 0)
+				wf = open(mpath, OWRITE);
+			if(wf < 0){
+				static int zw;
+
+				if(zw++ < 8)
+					fprint(2, "linuxrun: WFOPEN p%d %s: %r\n",
+						getpid(), mpath);
+				continue;
+			}
 		}
 		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		rf = open(target, OREAD);
-		/* ORDRW, not OWRITE: an OWRITE open of a posted /srv
-		 * file is the POSTING side of devsrv's fd sharing, not
-		 * the consuming side - the qid probe proved wf did not
-		 * match the client's pipe (every server reply was
-		 * vanishing into the /srv file) while the OREAD open
-		 * of .a shares correctly */
-		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
-		wf = open(target, ORDWR);
-		if(wf < 0)
-			wf = open(target, OWRITE);
+		/* wf came from /proc above */
 		if(rf < 0 || wf < 0)
 			continue;
 		/* consume the ticket: entries are removed once served, so
