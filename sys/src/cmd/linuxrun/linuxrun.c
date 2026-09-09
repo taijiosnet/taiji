@@ -1662,10 +1662,21 @@ sysconnect(ulong path)
 	}
 	{
 		static int zk;
+		Dir *dc, *dd;
 
+		/* pipe identity: qid of the posted ends (.a=c2s[0],
+		 * .b=s2c[1]) - the acceptor prints its opened ends'
+		 * qids; a mismatch proves the /srv open produced a
+		 * copy instead of sharing the channel */
+		dc = dirfstat(c2s[0]);
+		dd = dirfstat(s2c[1]);
 		if(zk++ < 10)
-			fprint(2, "linuxrun: CONNECT p%d queued %s\n",
-				getpid(), (char*)path);
+			fprint(2, "linuxrun: CONNECT p%d queued %s a=%llux.%llux b=%llux.%llux\n",
+				getpid(), (char*)path,
+				dc ? dc->qid.path : 0, dc ? dc->qid.vers : 0,
+				dd ? dd->qid.path : 0, dd ? dd->qid.vers : 0);
+		free(dc);
+		free(dd);
 	}
 	connseq++;
 	/* the two /srv posts ARE the queue: the (nonblocking)
@@ -1808,13 +1819,22 @@ sysaccept(void)
 		remove(target);
 		{
 			static int za;
+			Dir *dr, *dw;
 
 			/* the server<->client map: which guest proc is on
 			 * which bridge pair, so reply writes can be traced
-			 * to the client they belong to */
+			 * to the client they belong to.  qids of the opened
+			 * ends match the CONNECT print's - mismatch = the
+			 * /srv open copied instead of shared */
+			dr = dirfstat(rf);
+			dw = dirfstat(wf);
 			if(za++ < 40)
-				fprint(2, "linuxrun: ACCEPT p%d client=%d seq=%d rf=%d wf=%d\n",
-					getpid(), cpid, cseq, rf, wf);
+				fprint(2, "linuxrun: ACCEPT p%d client=%d seq=%d rf=%d wf=%d r=%llux.%llux w=%llux.%llux\n",
+					getpid(), cpid, cseq, rf, wf,
+					dr ? dr->qid.path : 0, dr ? dr->qid.vers : 0,
+					dw ? dw->qid.path : 0, dw ? dw->qid.vers : 0);
+			free(dr);
+			free(dw);
 		}
 		return (rf<<16) | wf;
 	}
