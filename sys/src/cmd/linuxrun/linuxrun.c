@@ -3585,7 +3585,9 @@ dosyscall(Ureg *ur)
 			 * one bounded chunk is enough for the callers here;
 			 * blocking matches splice-on-pipe semantics */
 		if(a1 < 0x10000UL && a4 < 0x10000UL && a5 > 0){
-			char sb[32*1024];
+			static char sb[32*1024];	/* NOT on the note stack -
+							 * a 32KB frame smashed
+							 * it and killed guests */
 			long got, want;
 
 			want = a5 > sizeof sb ? sizeof sb : a5;
