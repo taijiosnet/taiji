@@ -1775,8 +1775,14 @@ sysaccept(void)
 					ok = strcmp(tbuf, boundpath) == 0;
 				}
 			}
-			if(!ok)
+			if(!ok){
+				static int zm;
+
+				if(zm++ < 8)
+					fprint(2, "linuxrun: TKSKIP p%d ticket=%s mine=%s open=%d n=%d\n",
+						getpid(), tbuf, boundpath, tf, tn);
 				continue;
+			}
 		}
 		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
@@ -1855,6 +1861,13 @@ listenqueued(void)
 			if(tn > 0){
 				tbuf[tn] = 0;
 				ok = strcmp(tbuf, boundpath) == 0;
+				{
+					static int zl;
+
+					if(zl++ < 6)
+						fprint(2, "linuxrun: LISTEN p%d ticket=%s mine=%s ok=%d\n",
+							getpid(), tbuf, boundpath, ok);
+				}
 			}
 		}
 		if(ok)
