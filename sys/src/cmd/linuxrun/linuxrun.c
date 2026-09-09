@@ -2324,6 +2324,31 @@ dosyscall(Ureg *ur)
 	case 252:	/* exit_group */
 		dumpopc();
 		fprint(2, "linuxrun: exit status=%lux\n", a1 & 0xff);
+		if((a1 & 0xff) == 127 && started){
+			/* posix_spawn children _exit(127) when their
+			 * userspace pre-exec fails - dump the caller so
+			 * the failing branch can be symbolized */
+			ulong *stk;
+			int i;
+
+			fprint(2, "linuxrun: EXIT127 p%d pc=%lux sp=%lux bp=%lux\n",
+				getpid(), ur->pc, ur->sp, ur->bp);
+			fprint(2, "linuxrun: ax=%lux bx=%lux cx=%lux dx=%lux si=%lux di=%lux\n",
+				ur->ax, ur->bx, ur->cx, ur->dx, ur->si, ur->di);
+			for(i = 0; i < 32; i++){
+				int ri;
+
+				ri = (sysri+i) % 32;
+				if(sysring[ri][0] != 0)
+					fprint(2, "linuxrun:  sys-%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
+						i, sysring[ri][0], sysring[ri][1], sysring[ri][2], sysring[ri][3]);
+			}
+			if(ur->sp > 0x10000 && ur->sp < 0x70000000){
+				stk = (ulong*)ur->sp;
+				for(i = 0; i < 16; i++)
+					fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);
+			}
+		}
 		snprint(exitstr, sizeof exitstr, "%lux", a1 & 0xff);
 		exits(exitstr);
 		return 0;
@@ -3656,12 +3681,17 @@ dosyscall(Ureg *ur)
 	case 16:	/* lchown */
 	case 212:	/* chown32 */
 	case 213:	/* setuid32: Popen children _exit(127) if it fails */
-	case 214:	/* setgid32 */
+	case 214:	/* setresuid32 - Xorg's Popen child checks
+		 * setuid(getuid()) and _exit(127)s on failure: this MUST
+		 * succeed (it accidentally shared the splice body once and
+		 * EINVAL'd every spawn) */
 	case 23:	/* setuid */
 	case 46:	/* setgid */
 	case 94:	/* setgroups */
 	case 291:	/* inotify_init: no events are ever reported, so a
 			 * quiet placeholder fd satisfies GLib monitors */
+		r = 0;
+		break;
 	case 340:	/* splice(fd_in, off_in, fd_out, off_out, len, flags):
 			 * dbus's remaining ENOSYS.  A pipe-to-pipe move in
 			 * one bounded chunk is enough for the callers here;
@@ -3802,8 +3832,22 @@ dosyscall(Ureg *ur)
 			fprint(2, "linuxrun: MAP p%d nr=%lux addr=%lux len=%lux -> %ld (bump=%lux)\n",
 				getpid(), nr, a1, a2, r, mapbump);
 	}
-	if(verbose)
-		fprint(2, "linuxrun: sys %lux -> %ld\n", nr, r);
+		if(verbose)
+			fprint(2, "linuxrun: sys %lux -> %ld\n", nr, r);
+	{
+		/* set*id family results: Xorg's Popen child _exit(127)s
+		 * if setuid(getuid()) fails - the number labels in the
+		 * case table have been shifted before, so log every
+		 * call and return of the whole family */
+		static int zs;
+
+		if(zs++ < 20 &&
+		   (nr == 23 || nr == 46 || nr == 49 || nr == 50 ||
+		    nr == 24 || nr == 47 || nr == 164 || nr == 165 ||
+		    (nr >= 199 && nr <= 214) || nr == 2 || nr == 190))
+			fprint(2, "linuxrun: SETID p%d nr=%lux(%ld) a1=%lux -> %ld\n",
+				getpid(), nr, nr, a1, r);
+	}
 	return r;
 }
 
