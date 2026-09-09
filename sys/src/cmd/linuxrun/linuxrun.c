@@ -1026,6 +1026,7 @@ int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
  * deadlock cannot form, and plan9 needs no nonblocking write. */
 uchar *inq[NSOCK];
 int soeof[NSOCK];	/* peer closed its end (read gave EOF) */
+int gifseq[NSOCK];	/* pending GetInputFocus (op 43) request seq, for the None->PointerRoot reply rewrite */
 ulong inqn[NSOCK], inqcap[NSOCK];
 
 static ulong
@@ -1146,8 +1147,11 @@ sockopc(int slot, void *buf, long n, int wr)
 			fprint(2, "\n");
 		}
 	}
-	if(wr)
+	if(wr){
+		if(op == 43 && slot >= 0 && slot < NSOCK)
+			gifseq[slot] = seq;
 		wopc[slot][op]++;
+	}
 	else
 		ropc[slot][op]++;
 	/* live frame-lifecycle trace: the requests that map and
@@ -1636,6 +1640,22 @@ sockread(int gfd, void *buf, ulong n)
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
 		sockopc(sockslot(gfd), buf, i, 0);
+	/* GetInputFocus reply: 01 00 seq2 revert-to(1) pad focus(4)@8.
+	 * Xvfb answers focus=None when no WM has set focus yet; real
+	 * servers commonly hand back PointerRoot here, and gdk's
+	 * focus-tracking treats None badly downstream (xfwm4 queried
+	 * attributes of window None and stalled).  Rewrite None ->
+	 * PointerRoot (1), which gdk handles cleanly. */
+	if(i == 32 && ((uchar*)buf)[0] == 1 && gifseq[slot] != 0 &&
+	   (((uchar*)buf)[2] | (((uchar*)buf)[3]<<8)) == (gifseq[slot] & 0xffff) &&
+	   ((ulong*)buf)[2] == 0 && ((ulong*)buf)[3] == 0){
+		/* GetInputFocus reply (seq-matched): focus None ->
+		 * PointerRoot - gdk's focus tracking treats None badly
+		 * (xfwm4 queried attributes of window None and its
+		 * startup stalled before the tree scan) */
+		((uchar*)buf)[11] = 1;
+		gifseq[slot] = 0;
+	}
 	if(i == 0 && sockslot(gfd) >= 0)
 		soeof[sockslot(gfd)] = 1;	/* peer closed */
 	return i;
