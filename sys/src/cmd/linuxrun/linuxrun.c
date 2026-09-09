@@ -2998,7 +2998,7 @@ dosyscall(Ureg *ur)
 				static int zep;
 				int zi, zn;
 
-				if(zep++ % 100 == 0){
+				if(zep++ % 20 == 0){
 					zn = 0;
 					fprint(2, "linuxrun: EPW p%d epfd=%d to=%ld n=%d fds:",
 						getpid(), (int)a1, (long)a4, n);
