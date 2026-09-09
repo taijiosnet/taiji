@@ -2812,7 +2812,7 @@ dosyscall(Ureg *ur)
 	case 256:	/* epoll_wait_old */
 		{
 			ulong *ev;
-			int i, maxev, n;
+			int i, maxev, n, zi;
 
 			ev = (ulong*)a2;
 			maxev = (int)a3;
@@ -2874,13 +2874,58 @@ dosyscall(Ureg *ur)
 				}
 				n++;
 			}
-			if(n == 0 && a4 > 0){
-				/* a real timeout means the caller expects to
-				 * wait: honor it (capped) instead of spinning -
-				 * Xorg's epoll_wait+clock_gettime64 loop ran
-				 * flat out otherwise.  timeout-0 callers keep
-				 * getting an immediate empty return. */
-				sleep(a4 > 50 ? 50 : a4);
+			if(n == 0 && a4 != 0){
+				/* a blocking or timed wait expects to sleep
+				 * until events appear: re-scan after each
+				 * slice instead of returning a stale empty
+				 * snapshot - data that arrives after the
+				 * first scan was invisible to a caller that
+				 * blocks in one epoll_wait (timeout-0
+				 * callers still return immediately) */
+				long tleft;
+
+				tleft = a4;
+				while(n == 0){
+					sleep(20);
+					if(tleft > 0){
+						tleft -= 20;
+						if(tleft <= 0)
+							break;
+					}
+					/* re-scan */
+					n = 0;
+					for(zi = 0; zi < Maxep && n < maxev; zi++){
+						int evv2, slot2;
+
+						if(eptab[zi].epfd != (int)a1)
+							continue;
+						if(islistener((int)eptab[zi].fd) && !listenqueued())
+							continue;
+						evv2 = eptab[zi].events & 0xffffffff;
+						slot2 = sockslot((int)eptab[zi].fd);
+						if(slot2 >= 0 && sockmap[slot2][2] != 0 &&
+						    (evv2 & 1) && sockinready((int)eptab[zi].fd) <= 0)
+							evv2 &= ~1;
+						if(slot2 < 0 && (evv2 & 1)){
+							Dir *d;
+
+							if((d = dirfstat((int)eptab[zi].fd)) != nil){
+								if(d->length <= 0)
+									evv2 &= ~1;
+								free(d);
+							}
+						}
+						evv2 &= 5;
+						if(evv2 == 0)
+							continue;
+						if(ev != nil){
+							ev[n*3] = evv2;
+							ev[n*3+1] = (ulong)eptab[zi].data;
+							ev[n*3+2] = 0;
+						}
+						n++;
+					}
+				}
 			}
 			{
 				/* the spin forensics probe: what timeout the
