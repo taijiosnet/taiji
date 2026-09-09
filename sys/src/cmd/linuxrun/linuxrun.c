@@ -3329,6 +3329,7 @@ dosyscall(Ureg *ur)
 						for(k2 = 0; k2 < (long)a2 && k2 < 6; k2++){
 							Dir *d;
 							ulong ql;
+							int qs2;
 
 							ql = 0;
 							if((d = dirfstat(pf[k2].fd)) != nil){
@@ -3337,6 +3338,17 @@ dosyscall(Ureg *ur)
 							}
 							fprint(2, " %d/%ux/q%lux",
 								pf[k2].fd, pf[k2].events, ql);
+							qs2 = sockslot(pf[k2].fd);
+							if(qs2 >= 0){
+								Dir *d2;
+
+								fprint(2, " map%lux",
+									sockmap[qs2][2]);
+								if((d2 = dirfstat(sockmap[qs2][2] >> 16)) != nil){
+									fprint(2, "/r%lux", d2->length);
+									free(d2);
+								}
+							}
 						}
 						fprint(2, "\n");
 					}
