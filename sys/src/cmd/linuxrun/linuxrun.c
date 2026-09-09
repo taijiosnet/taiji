@@ -1152,22 +1152,18 @@ sockopc(int slot, void *buf, long n, int wr)
 		if(op == 43 && slot >= 0 && slot < NSOCK)
 			gifseq[slot] = seq;
 		/* first write per socket = the connection setup reply;
-		 * the first screen's ROOT WINDOW sits after vendor +
-		 * pixmap formats - dump it to see whether retries ever
-		 * see root=0 (the WM's final tree scan queried None) */
+		 * dump RAW bytes 0-71 so vendor length, format count and
+		 * the first screen's root window can be read directly off
+		 * the wire (computed offsets disagreed with the bytes) */
 		if(slot >= 0 && slot < NSOCK && setupdone[slot] == 0 &&
 		   n >= 64 && ((uchar*)buf)[0] == 1){
-			int sb, rootoff;
-			int vendor, formats;
+			int sb;
 
-			vendor = ((uchar*)buf)[24] | (((uchar*)buf)[25]<<8);
-			formats = ((uchar*)buf)[29];
-			rootoff = 32 + 8*formats + ((vendor+3)&~3);
 			setupdone[slot] = 1;
-			fprint(2, "linuxrun: SETUP p%d g%d n=%ld root@+%d =",
-				getpid(), sockmap[slot][0], n, rootoff);
-			for(sb = 0; sb < 4 && rootoff+sb < n; sb++)
-				fprint(2, " %2.2ux", ((uchar*)buf)[rootoff+sb]);
+			fprint(2, "linuxrun: SETUP p%d g%d n=%ld bytes:",
+				getpid(), sockmap[slot][0], n);
+			for(sb = 0; sb < 72 && sb < n; sb++)
+				fprint(2, " %2.2ux", ((uchar*)buf)[sb]);
 			fprint(2, "\n");
 		}
 		wopc[slot][op]++;
