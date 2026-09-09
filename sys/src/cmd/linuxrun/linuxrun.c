@@ -1826,28 +1826,14 @@ sysaccept(void)
 				continue;
 			}
 			remove(mpath);	/* consume with the ticket */
-			/* the client's write end, taken through /proc: the
-			 * /srv OWRITE open provably does not share the pipe
-			 * channel (qid mismatch) - /proc/<pid>/fd/N does */
-			snprint(mpath, sizeof mpath, "#p/%d/fd/%d", cpid, cwfd);
-			wf = open(mpath, ORDWR);
-			if(wf < 0)
-				wf = open(mpath, OWRITE);
-			if(wf < 0){
-				static int zw;
-
-				if(zw++ < 8)
-					fprint(2, "linuxrun: WFOPEN p%d %s: %r\n",
-						getpid(), mpath);
-				continue;
-			}
 		}
 		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		rf = open(target, OREAD);
-		/* wf came from /proc above */
+		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
+		wf = open(target, OWRITE);
 		if(rf < 0 || wf < 0)
 			continue;
 		/* consume the ticket: entries are removed once served, so
