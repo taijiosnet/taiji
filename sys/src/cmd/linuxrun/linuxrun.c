@@ -1806,8 +1806,16 @@ sysaccept(void)
 			continue;
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		rf = open(target, OREAD);
+		/* ORDRW, not OWRITE: an OWRITE open of a posted /srv
+		 * file is the POSTING side of devsrv's fd sharing, not
+		 * the consuming side - the qid probe proved wf did not
+		 * match the client's pipe (every server reply was
+		 * vanishing into the /srv file) while the OREAD open
+		 * of .a shares correctly */
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
-		wf = open(target, OWRITE);
+		wf = open(target, ORDWR);
+		if(wf < 0)
+			wf = open(target, OWRITE);
 		if(rf < 0 || wf < 0)
 			continue;
 		/* consume the ticket: entries are removed once served, so
