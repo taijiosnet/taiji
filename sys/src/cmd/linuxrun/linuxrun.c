@@ -2614,19 +2614,23 @@ dosyscall(Ureg *ur)
 		r = syswritev(a1, a2, a3);
 		break;
 	case 341:	/* prlimit64(pid, resource, new_rlim, old_rlim): dbus-daemon
-		 * reads its fd limit through this and aborted the step with
-		 * "Failed to get fd limit: Function not implemented" */
+		 * reads its fd limit through this.  The rlimit struct on
+		 * i386 holds TWO 64-bit fields (cur at +0, max at +8) -
+		 * filling only the first 8 bytes left rlim_max garbage and
+		 * dbus rejected its own limit ("Invalid argument") */
 		if(a4 != 0 && a4 > 0x10000){
-			if(a2 == 3){
-				*(ulong*)a4 = 8*1024*1024;
-				*(ulong*)(a4+4) = 8*1024*1024;
-			}else if(a2 == 7){
-				*(ulong*)a4 = 1024;
-				*(ulong*)(a4+4) = 1024;
-			}else{
-				*(ulong*)a4 = 0x7fffffff;
-				*(ulong*)(a4+4) = 0x7fffffff;
-			}
+			ulong v;
+
+			if(a2 == 3)
+				v = 8*1024*1024;
+			else if(a2 == 7)
+				v = 1024;
+			else
+				v = 0x7fffffff;
+			*(ulong*)a4 = v;
+			*(ulong*)(a4+4) = 0;
+			*(ulong*)(a4+8) = v;
+			*(ulong*)(a4+12) = 0;
 		}
 		r = 0;
 		break;
