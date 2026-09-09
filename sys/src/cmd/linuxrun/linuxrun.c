@@ -1155,14 +1155,13 @@ sockopc(int slot, void *buf, long n, int wr)
 		 * dump RAW bytes 0-71 so vendor length, format count and
 		 * the first screen's root window can be read directly off
 		 * the wire (computed offsets disagreed with the bytes) */
-		if(slot >= 0 && slot < NSOCK && setupdone[slot] == 0 &&
-		   n >= 64 && ((uchar*)buf)[0] == 1){
+		if(slot >= 0 && slot < NSOCK && setupdone[slot] < 10){
 			int sb;
 
-			setupdone[slot] = 1;
+			setupdone[slot]++;
 			fprint(2, "linuxrun: SETUP p%d g%d n=%ld bytes:",
 				getpid(), sockmap[slot][0], n);
-			for(sb = 0; sb < 72 && sb < n; sb++)
+			for(sb = 0; sb < 16 && sb < n; sb++)
 				fprint(2, " %2.2ux", ((uchar*)buf)[sb]);
 			fprint(2, "\n");
 		}
