@@ -1612,6 +1612,7 @@ static int traphandler(void*, char*);
  * pid (glvnd/mesa opens one, at-spi another) must queue a second
  * ticket, not overwrite the first */
 static int connseq;
+int forktrace;	/* >0: this fork-snapshot child traces its next syscalls */
 
 static long
 sysconnect(ulong path)
@@ -1646,19 +1647,18 @@ sysconnect(ulong path)
 	snprint(target, sizeof target, "/srv/x.c.%d.%d.b", getpid(), connseq);
 	if(postsrvfd(target, s2c[1]) < 0)
 		return -Enomem;
-	/* the target socket path: without it ANY listener's accept
-	 * would eat this ticket - the dbus daemon stole the X
-	 * server's clients and vice versa */
+	/* the target socket marker: NOT in /srv - devsrv files are
+	 * fd-sharing entries, readers get a dup of the writer's fd
+	 * instead of the content.  The marker sits beside the server's
+	 * .req file (a plain rootfs file): its existence IS the match */
 	{
 		int tf;
+		char mbuf[384];
 
-		snprint(target, sizeof target, "/srv/x.c.%d.%d.t", getpid(), connseq);
-		tf = create(target, OWRITE|OTRUNC, 0666);
-		if(tf >= 0){
-			if(write(tf, (char*)path, strlen((char*)path)) < 0)
-				;
+		snprint(mbuf, sizeof mbuf, "%s.t.%d.%d", (char*)path, getpid(), connseq);
+		tf = create(mbuf, OWRITE|OTRUNC, 0666);
+		if(tf >= 0)
 			close(tf);
-		}
 	}
 	{
 		static int zk;
@@ -1772,30 +1772,23 @@ sysaccept(void)
 			continue;	/* only the .a twin queues */
 		/* only tickets aimed at OUR socket: without this check any
 		 * listener ate any pending connect (the dbus daemon stole
-		 * the X server's clients) */
+		 * the X server's clients).  The client drops a plain-file
+		 * marker beside its target: <path>.t.<pid>.<seq> */
 		{
-			char tbuf[256], tpath[64];
-			int tf, tn, ok;
+			char mpath[384];
+			int ok;
 
-			ok = 0;
-			snprint(tpath, sizeof tpath, "/srv/x.c.%d.%d.t", cpid, cseq);
-			tf = open(tpath, OREAD);
-			if(tf >= 0){
-				tn = readn(tf, tbuf, sizeof tbuf-1);
-				close(tf);
-				if(tn > 0){
-					tbuf[tn] = 0;
-					ok = strcmp(tbuf, boundpath) == 0;
-				}
-			}
+			snprint(mpath, sizeof mpath, "%s.t.%d.%d", boundpath, cpid, cseq);
+			ok = access(mpath, AEXIST) >= 0;
 			if(!ok){
 				static int zm;
 
 				if(zm++ < 8)
-					fprint(2, "linuxrun: TKSKIP p%d ticket=%s mine=%s open=%d n=%d\n",
-						getpid(), tbuf, boundpath, tf, tn);
+					fprint(2, "linuxrun: TKSKIP p%d want=%s\n",
+						getpid(), mpath);
 				continue;
 			}
+			remove(mpath);	/* consume with the ticket */
 		}
 		snprint(target, sizeof target, "x.c.%d.%d.b", cpid, cseq);
 		if(memfind(buf, n, target) == nil)
@@ -1812,8 +1805,6 @@ sysaccept(void)
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
 		remove(target);
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
-		remove(target);
-		snprint(target, sizeof target, "/srv/x.c.%d.%d.t", cpid, cseq);
 		remove(target);
 		{
 			static int za;
@@ -1862,29 +1853,15 @@ listenqueued(void)
 		snprint(tgt, sizeof tgt, "x.c.%d.%d.b", cpid, s2);
 		if(memfind(buf, n, tgt) == nil)
 			continue;
-		/* only tickets aimed at this listener (see sysaccept) */
-		ok = 0;
-		snprint(tgt, sizeof tgt, "/srv/x.c.%d.%d.t", cpid, s2);
-		tf = open(tgt, OREAD);
-		if(tf >= 0){
-			char tbuf[256];
+		/* only tickets aimed at this listener: the client's
+		 * <path>.t.<pid>.<seq> marker beside our boundpath */
+		{
+			char mpath[384];
 
-			tn = readn(tf, tbuf, sizeof tbuf-1);
-			close(tf);
-			if(tn > 0){
-				tbuf[tn] = 0;
-				ok = strcmp(tbuf, boundpath) == 0;
-				{
-					static int zl;
-
-					if(zl++ < 6)
-						fprint(2, "linuxrun: LISTEN p%d ticket=%s mine=%s ok=%d\n",
-							getpid(), tbuf, boundpath, ok);
-				}
-			}
+			snprint(mpath, sizeof mpath, "%s.t.%d.%d", boundpath, cpid, s2);
+			if(access(mpath, AEXIST) >= 0)
+				return 1;
 		}
-		if(ok)
-			return 1;
 	}
 	return 0;
 }
@@ -2151,20 +2128,30 @@ sysexecve(char *path, char **gargv)
 	int fd, i, j;
 	Ehdr eh;
 	uchar hdr[64];
+	static int zx;
 
+	if(zx++ < 60)
+		fprint(2, "linuxrun: EXEC p%d %s (started=%d)\n",
+			getpid(), path ? path : "?", started);
 	if(path == nil || path[0] == 0)
 		return -Efault;
 	fd = open(path, OREAD);
-	if(fd < 0)
+	if(fd < 0){
+		if(zx < 60)
+			fprint(2, "linuxrun: EXECFAIL p%d %s: open: %r\n",
+				getpid(), path);
 		return -Enoent;
+	}
 	if(readat(fd, hdr, sizeof hdr, 0) < 0){
 		close(fd);
+		fprint(2, "linuxrun: EXECFAIL p%d %s: read: %r\n", getpid(), path);
 		return -Enoent;
 	}
 	memset(&eh, 0, sizeof eh);
 	memmove(eh.ident, hdr, Elfident);
 	if(eh.ident[EiClass] != Elfclass32 || eh.ident[EiData] != Elfdata2lsb){
 		close(fd);
+		fprint(2, "linuxrun: EXECFAIL p%d %s: not i386 ELF\n", getpid(), path);
 		return -Enoexec;
 	}
 	eh.type = le16(hdr+16);
@@ -2218,11 +2205,16 @@ sysexecve(char *path, char **gargv)
 		Ehdr ieh;
 		uchar ihdr[64];
 
-		if(interppath[0] == 0)
+		if(interppath[0] == 0){
+			fprint(2, "linuxrun: EXECFAIL p%d %s: no interp\n", getpid(), path);
 			return -Enoexec;
+		}
 		ifd = open(interppath, OREAD);
-		if(ifd < 0)
+		if(ifd < 0){
+			fprint(2, "linuxrun: EXECFAIL p%d %s: interp %s: %r\n",
+				getpid(), path, interppath);
 			return -Enoent;
+		}
 		if(readat(ifd, ihdr, sizeof ihdr, 0) < 0){
 			close(ifd);
 			return -Enoent;
@@ -2245,6 +2237,13 @@ sysexecve(char *path, char **gargv)
 	 * it back */
 	segat(Mapbase, Mapsize);
 	stacktop = buildstack(countargs(gargv), gargv);
+	{
+		static int zok;
+
+		if(zok++ < 60)
+			fprint(2, "linuxrun: EXECOK p%d %s entry=%lux\n",
+				getpid(), path, entrypc);
+	}
 	return 0;
 }
 
@@ -2297,14 +2296,19 @@ dosyscall(Ureg *ur)
 		}
 	}
 	{
-		/* enter-trace for blocking candidates only: a process
-		 * stuck in ONE blocking host call produces no further
-		 * output - the last line before the silence names the
-		 * culprit. Loader noise is excluded or the cap dies in
-		 * library loading. */
+		/* enter-trace: a process stuck in ONE blocking host call
+		 * produces no further output of any kind - the last ENT
+		 * line before the silence names the culprit syscall.
+		 * Loader noise is excluded or the cap dies in
+		 * library loading.  Fork-snapshot children trace EVERY
+		 * syscall uncapped for their first moments (forktrace). */
 		static int zent;
 
-		if(zent++ < 3000 &&
+		if(forktrace > 0){
+			forktrace--;
+			fprint(2, "linuxrun: FT p%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
+				getpid(), nr, a1, a2, a3);
+		}else if(zent++ < 3000 &&
 		   (nr == 3 || nr == 4 || nr == 145 || nr == 146 ||
 		    nr == 168 || nr == 240 || nr == 422 || nr == 102))
 			fprint(2, "linuxrun: ENT p%d nr=%lux a1=%lux a2=%lux\n",
@@ -4043,6 +4047,9 @@ traphandler(void *v, char *msg)
 				}
 			}
 			close(pmfd);
+			forktrace = 80;	/* uncapped syscall trace for this
+					 * child's first moments: the
+					 * xkbcomp spawn died silently */
 			fprint(2, "linuxrun: FMEM p%d copy done\n", getpid());
 		}else{
 			/* CLONE_FILES thread: adopt the thread-group parent
