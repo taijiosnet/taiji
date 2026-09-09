@@ -2689,6 +2689,22 @@ dosyscall(Ureg *ur)
 				if(slot >= 0 && sockmap[slot][2] != 0 &&
 				    (evv & 1) && sockinready((int)eptab[i].fd) <= 0)
 					evv &= ~1;
+				if(slot < 0 && (evv & 1)){
+					/* a raw fd (pipe() stand-ins are
+					 * unregistered): report EPOLLIN
+					 * only when the queue really holds
+					 * data - assuming always-ready
+					 * made sd-event spin onto blocked
+					 * reads of its empty wakeup pipes,
+					 * freezing dbus-daemon at boot */
+					Dir *d;
+
+					if((d = dirfstat((int)eptab[i].fd)) != nil){
+						if(d->length <= 0)
+							evv &= ~1;
+						free(d);
+					}
+				}
 				/* report readiness only: registration flags
 				 * like EPOLLET must not come back, Xorg
 				 * reads any extra bit as a socket error */
@@ -3035,8 +3051,23 @@ dosyscall(Ureg *ur)
 										 * xcb forever */
 						}else if((ev & 0x1) && listenqueued())
 							re |= 0x1;	/* the listener */
-					}else
-						re = ev;	/* passthrough fds stay ready */
+					}else{
+						/* raw fd: POLLOUT stands (pipes
+						 * barely block), POLLIN only
+						 * when the queue holds data -
+						 * always-ready woke empty
+						 * wakeup pipes endlessly */
+						Dir *d;
+
+						re = ev & ~1;
+						if(ev & 0x1){
+							if((d = dirfstat(pf[k].fd)) != nil){
+								if(d->length > 0)
+									re |= 0x1;
+								free(d);
+							}
+						}
+					}
 					pf[k].revents = re;
 					if(re != 0)
 						r++;
