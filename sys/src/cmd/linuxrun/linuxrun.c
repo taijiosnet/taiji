@@ -1112,8 +1112,19 @@ sockopc(int slot, void *buf, long n, int wr)
 	if(nseq < 150){
 		if(wr){
 			nseq++;
-			fprint(2, "linuxrun: SEQ p%d g%d wr op=%d seq=%d n=%ld\n",
+			fprint(2, "linuxrun: SEQ p%d g%d wr op=%d seq=%d n=%ld",
 				getpid(), sockmap[slot][0], op, seq, n);
+			/* the full request head for window-bearing ops: a
+			 * corrupted window ID in a reply draws BadWindow
+			 * downstream - the request names what it asked */
+			if(op == 3 || op == 20 || op == 14 || op == 15){
+				int qb;
+
+				fprint(2, " req:");
+				for(qb = 0; qb < 12 && qb < n; qb++)
+					fprint(2, " %2.2ux", ((uchar*)buf)[qb]);
+			}
+			fprint(2, "\n");
 		}else if(op <= 1 || (wr == 0 && n <= 2600)){
 			nseq++;
 			fprint(2, "linuxrun: SEQ p%d g%d rd op=%d seq=%d n=%ld",
@@ -1123,6 +1134,15 @@ sockopc(int slot, void *buf, long n, int wr)
 				 * byte4-5 = minor, byte8 = major opcode */
 				fprint(2, " XERR code=%d maj=%d",
 					((uchar*)buf)[1], ((uchar*)buf)[8]);
+			if(n <= 40 && (op <= 1)){
+				/* full short reply bytes: the window-ID
+				 * fields (owner at +8) are the suspects */
+				int qb;
+
+				fprint(2, " rep:");
+				for(qb = 0; qb < n && qb < 32; qb++)
+					fprint(2, " %2.2ux", ((uchar*)buf)[qb]);
+			}
 			fprint(2, "\n");
 		}
 	}
