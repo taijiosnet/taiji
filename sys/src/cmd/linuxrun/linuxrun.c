@@ -2018,13 +2018,18 @@ dofutex(ulong addr, ulong op, ulong val, ulong utime)
 			 * re-checks and re-waits if it disagrees. */
 			return 0;
 		}
-	case 1:		/* WAKE */
-	case 3:		/* REQUEUE */
-	case 4:		/* CMP_REQUEUE */
-	case 5:		/* WAKE_OP */
+		case 1:		/* WAKE */
+		case 3:		/* REQUEUE */
+		case 4:		/* CMP_REQUEUE */
+		case 5:		/* WAKE_OP */
+			return 0;
+		}
+		/* WAIT_BITSET & co: glibc's modern locks use them (dbus
+		 * aborted 'Failed to get fd limit: Function not
+		 * implemented' from here) - report a spurious wakeup,
+		 * which the futex protocol explicitly allows callers to
+		 * tolerate by re-checking */
 		return 0;
-	}
-	return -Enosys;
 }
 
 static int
