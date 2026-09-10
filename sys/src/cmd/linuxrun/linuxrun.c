@@ -267,7 +267,7 @@ static long sysexecve(char*, char**);
 static int countargs(char**);
 static long dosocketcall(ulong, ulong);
 static long sysgetdents64(int, ulong, ulong);
-static long dofutex(ulong, ulong, ulong, ulong);
+static long dofutex(ulong, ulong, ulong, ulong, ulong, ulong);
 
 static void
 fatal(char *fmt, ...)
@@ -574,6 +574,35 @@ static void sockpredrain(void);
  * blocked write; POSIX expects the syscall retried, but an error
  * return made libxtrans abandon half-written replies - the client
  * then waits forever for the rest of a big reply */
+static void drainpeers(int);
+
+/* consume everything queued on a pipe without blocking */
+static void
+drainfd(int fd)
+{
+	char dbuf[512];
+	Dir *d;
+	int dn, tot;
+
+	tot = 0;
+	while((d = dirfstat(fd)) != nil){
+		int ql;
+
+		ql = d->length;
+		free(d);
+		if(ql <= 0)
+			break;
+		dn = read(fd, dbuf, ql < sizeof dbuf ? ql : sizeof dbuf);
+		if(dn <= 0)
+			break;
+		tot += dn;
+		if(tot > 1<<20)
+			break;
+	}
+	if(tot)
+		fprint(2, "linuxrun: DRAIN p%d fd=%d drained=%d\n", getpid(), fd, tot);
+}
+
 static long
 sockwr(int fd, void *buf, long n)
 {
@@ -582,12 +611,24 @@ sockwr(int fd, void *buf, long n)
 
 	done = 0;
 	while(done < n){
+		alarm(3000);
 		while((w = write(fd, (char*)buf+done, n-done)) < 0){
 			errstr(es, sizeof es);
-			if(strcmp(es, "interrupted") == 0)
+			if(strcmp(es, "interrupted") == 0){
+				/* a full wakeup-style pipe whose reader
+				 * never drains it would freeze the writer
+				 * forever: drain the peer end so the write
+				 * can proceed (eventfd semantics tolerate
+				 * counter loss) */
+				alarm(0);
+				drainpeers(fd);
+				alarm(3000);
 				continue;
+			}
+			alarm(0);
 			return -1;
 		}
+		alarm(0);
 		if(w < n-done){
 			/* plan9 pipes can take partial blocks when their
 			 * queue fills: report it once (the fragment size
@@ -1020,6 +1061,20 @@ initsysinfo(void)
  * poll() and recv() unchanged. */
 #define NSOCK 16
 int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
+
+/* a write to a full wakeup pipe must not freeze the writer: drain the
+ * peer end of the bridge socket whose write side is fd */
+static void
+drainpeers(int fd)
+{
+	int i;
+
+	for(i = 0; i < NSOCK; i++)
+		if(sockmap[i][1] && (sockmap[i][2] & 0xffff) == fd){
+			drainfd(sockmap[i][2] >> 16);
+			break;
+		}
+}
 /* Receive-side buffering: every guest write to a bridge socket first
  * drains the process's own readable pipes into these buffers, so a
  * peer blocked on a full pipe always completes - the two-pipe X
@@ -1468,6 +1523,13 @@ sockmapfd(int fd, ulong packed)
 {
 	int i, j;
 
+	{
+		static int zm;
+
+		if(zm++ < 60)
+			fprint(2, "linuxrun: SMAP p%d fd=%d pipes=%lux\n",
+				getpid(), fd, packed);
+	}
 	j = -1;
 	for(i = 0; i < NSOCK; i++){
 		if(sockmap[i][1] && sockmap[i][0] == fd){
@@ -2332,17 +2394,56 @@ sysgetdents64(int fd, ulong buf, ulong len)
 }
 
 static long
-dofutex(ulong addr, ulong op, ulong val, ulong utime)
+dofutex(ulong addr, ulong op, ulong val, ulong utime, ulong a5, ulong a6)
 {
-	switch(op & 127){
-	case 0:		/* WAIT: poll; the waiters re-check shared memory */
+	int sub;
+	{
+		static int zo;
+
+		if(zo++ < 60)
+			fprint(2, "linuxrun: FTX p%d op=%lux addr=%lux val=%lux\n",
+				getpid(), op, addr, val);
+	}
+
+	sub = op & 127;
+	switch(sub){
+	case 0:		/* WAIT: poll the shared word; waiters re-check */
+	case 9:		/* WAIT_BITSET: same, but the timespec is an
+			 * ABSOLUTE CLOCK_MONOTONIC deadline */
 		{
+			vlong deadline, nowv;
 			int i;
 
+			/* utime is a guest timespec*; WAIT/WAIT_PRIVATE
+			 * carry a RELATIVE timeout, BITSET an absolute
+			 * one.  The old code returned ETIMEDOUT
+			 * instantly for any timed wait, which turned
+			 * glib's gdbus retries and glibc cond timeouts
+			 * into zero-delay spin loops. */
+			deadline = 0;
+			if(utime != 0){
+				vlong ts;
+
+				ts = *(int*)utime;	/* nsec() scaled below */
+				ts = ((vlong)*(ulong*)utime)*1000000000LL
+					+ (vlong)*(ulong*)(utime+4);
+				if(sub == 0)
+					deadline = nsec() + ts;
+				else{
+					/* absolute: CLOCK_MONOTONIC */
+					nowv = nsec();
+					deadline = ts;
+					if(deadline <= nowv){
+						if(*(int*)addr == (int)val)
+							return -110;
+						return 0;
+					}
+				}
+			}
 			for(i = 0; i < 1000; i++){
 				if(*(int*)addr != (int)val)
 					return 0;
-				if(utime != 0)
+				if(utime != 0 && nsec() >= deadline)
 					return -110;	/* -ETIMEDOUT */
 				sleep(1);
 			}
@@ -2356,14 +2457,46 @@ dofutex(ulong addr, ulong op, ulong val, ulong utime)
 		case 1:		/* WAKE */
 		case 3:		/* REQUEUE */
 		case 4:		/* CMP_REQUEUE */
-		case 5:		/* WAKE_OP */
 			return 0;
+		case 5:		/* WAKE_OP: the waker ALSO performs an atomic
+			 * op on a second word - skipping it desyncs glibc's
+			 * lowlevellock protocol, so do the op here */
+		{
+			int oparg, cmparg, newv, old;
+			ulong addr2;
+
+			USED(utime);
+			addr2 = a5;	/* futex(uaddr1, WAKE_OP, val, val2, uaddr2) */
+			oparg = (op >> 12) & 0xfff;
+			cmparg = (op >> 24) & 0xfff;
+			old = *(int*)addr2;
+			switch((op >> 28) & 7){
+			case 0: newv = old + oparg; break;
+			case 1: newv = old - oparg; break;
+			case 2: newv = old | oparg; break;
+			case 3: newv = old & oparg; break;
+			case 4: newv = old ^ oparg; break;
+			case 5: newv = old | (1 << oparg); break;
+			case 6: newv = old & ~(1 << oparg); break;
+			default: newv = old; break;
+			}
+			*(int*)addr2 = newv;
+			/* wake only when the comparator says so */
+			switch(cmparg){
+			case 0: return 1;
+			case 1: return old == 0;
+			case 2: return old != 0;
+			case 3: return old < 0;
+			case 4: return old <= 0;
+			case 5: return old > 0;
+			case 6: return old >= 0;
+			}
+			return 1;
 		}
-		/* WAIT_BITSET & co: glibc's modern locks use them (dbus
-		 * aborted 'Failed to get fd limit: Function not
-		 * implemented' from here) - report a spurious wakeup,
-		 * which the futex protocol explicitly allows callers to
-		 * tolerate by re-checking */
+		}
+		/* other flavors: report a spurious wakeup, which the
+		 * futex protocol explicitly allows callers to tolerate
+		 * by re-checking */
 		return 0;
 }
 
@@ -2507,7 +2640,7 @@ sysexecve(char *path, char **gargv)
 static long
 dosyscall(Ureg *ur)
 {
-	ulong nr, a1, a2, a3, a4, a5;
+	ulong nr, a1, a2, a3, a4, a5, a6;
 	long r;
 
 	nr = ur->ax;
@@ -2516,6 +2649,7 @@ dosyscall(Ureg *ur)
 	a3 = ur->dx;
 	a4 = ur->si;
 	a5 = ur->di;
+	a6 = ur->bp;
 	r = -Enosys;
 	{
 		static int flowc;
@@ -3856,7 +3990,7 @@ dosyscall(Ureg *ur)
 			r = 0;
 		break;
 	case 240:	/* futex */
-		r = dofutex(a1, a2, a3, a4);
+		r = dofutex(a1, a2, a3, a4, a5, a6);
 		break;
 	case 162:	/* nanosleep */
 		{
@@ -3880,8 +4014,14 @@ dosyscall(Ureg *ur)
 				int i;
 
 				i = sockslot((int)a1);
-				if(i >= 0)
+				if(i >= 0){
+					static int zf;
+
+					if(zf++ < 40)
+						fprint(2, "linuxrun: FDUP p%d fcntl %lux->%d pipes=%lux\n",
+							getpid(), a1, r, sockmap[i][2]);
 					sockmapfd(r, sockmap[i][2]);
+				}
 			}
 			break;
 		case 2:	/* SETFD: remember FD_CLOEXEC for exec */
@@ -4032,7 +4172,7 @@ dosyscall(Ureg *ur)
 			}
 			break;
 	case 422:	/* futex_time64 */
-		r = dofutex(a1, a2, a3, a4);
+		r = dofutex(a1, a2, a3, a4, a5, a6);
 		break;
 	case 99:	/* statfs: buf is the second argument, 84 bytes */
 		if(a2 > 0x10000)
