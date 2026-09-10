@@ -1098,11 +1098,13 @@ sockpredrain(void)
  * read (event/reply type) through a bridge socket, counted per slot */
 int wopc[NSOCK][256];
 int ropc[NSOCK][256];
+int xcli[NSOCK];
+long wroff[NSOCK];
 
 static void
 sockopc(int slot, void *buf, long n, int wr)
 {
-	static int npr, nseq;
+	static int npr, nseq, nxw;
 	int op, seq;
 
 	if(slot < 0 || n <= 0 || buf == nil)
@@ -1166,9 +1168,45 @@ sockopc(int slot, void *buf, long n, int wr)
 			fprint(2, "\n");
 		}
 		wopc[slot][op]++;
-	}
-	else
+		/* full write-stream dump for X client sockets (first write
+		 * starts with byte-order char 'l'/'B'): the WM's requests
+		 * 70/71 got BadWindow/BadDrawable with garbage bad-values,
+		 * so we need every request header, not only each write's
+		 * first request */
+		{
+			static int nrd;
+			int i, m, lim;
+			char hex[8200];
+
+			if(!xcli[slot] && (((uchar*)buf)[0] == 'l' || ((uchar*)buf)[0] == 'B'))
+				xcli[slot] = 1;
+			lim = n < 4096 ? (int)n : 4096;
+			if(xcli[slot] && nxw < 500){
+				nxw++;
+				for(i = 0; i < lim; i++)
+					sprint(hex + 2*i, "%2.2ux", ((uchar*)buf)[i]);
+				hex[2*lim] = 0;
+				fprint(2, "linuxrun: XWR p%d g%d n=%ld off=%ld: %s\n",
+					getpid(), sockmap[slot][0], n, wroff[slot], hex);
+			}
+			wroff[slot] += n;
+		}
+	}else{
+		static int nrd;
+		int i, m;
+		char rh[8200];
+
 		ropc[slot][op]++;
+		if(xcli[slot] && nrd < 400 && n <= 4096){
+			nrd++;
+			m = (int)n;
+			for(i = 0; i < m; i++)
+				sprint(rh + 2*i, "%2.2ux", ((uchar*)buf)[i]);
+			rh[2*m] = 0;
+			fprint(2, "linuxrun: XRD p%d g%d n=%ld: %s\n",
+				getpid(), sockmap[slot][0], n, rh);
+		}
+	}
 	/* live frame-lifecycle trace: the requests that map and
 	 * reparent, and the events that acknowledge them */
 	if(npr < 120){
@@ -1756,6 +1794,18 @@ sysconnect(ulong path)
 	int sfd, c2s[2], s2c[2];
 	char target[128];
 
+	{
+		static int zsq;
+
+		if(zsq++ < 40 && path != 0){
+			int sb;
+
+			fprint(2, "linuxrun: CONN p%d addr:", getpid());
+			for(sb = 0; sb < 24; sb++)
+				fprint(2, " %2.2ux", ((uchar*)path)[sb]);
+			fprint(2, "\n");
+		}
+	}
 	if(path == 0)
 		return -Efault;
 	if(((uchar*)path)[0] == 0)	/* abstract sockets: no pathname;
@@ -1772,16 +1822,34 @@ sysconnect(ulong path)
 				getpid(), (char*)path);
 		return -Enoent;
 	}
-	if(pipe(c2s) < 0 || pipe(s2c) < 0)
+	if(pipe(c2s) < 0 || pipe(s2c) < 0){
+		static int zp1;
+
+		if(zp1++ < 30)
+			fprint(2, "linuxrun: CONNFPIP p%d %s: pipe: %r\n",
+				getpid(), (char*)path);
 		return -Enomem;
+	}
 	/* server reads what we write: publish c2s[0]; it writes back on
 	 * s2c[1].  We keep c2s[1] (write) and s2c[0] (read). */
 	snprint(target, sizeof target, "/srv/x.c.%d.%d.a", getpid(), connseq);
-	if(postsrvfd(target, c2s[0]) < 0)
+	if(postsrvfd(target, c2s[0]) < 0){
+		static int zp2;
+
+		if(zp2++ < 30)
+			fprint(2, "linuxrun: CONNFPST p%d %s: postsrvfd a: %r\n",
+				getpid(), target);
 		return -Enomem;
+	}
 	snprint(target, sizeof target, "/srv/x.c.%d.%d.b", getpid(), connseq);
-	if(postsrvfd(target, s2c[1]) < 0)
+	if(postsrvfd(target, s2c[1]) < 0){
+		static int zp3;
+
+		if(zp3++ < 30)
+			fprint(2, "linuxrun: CONNFPST p%d %s: postsrvfd b: %r\n",
+				getpid(), target);
 		return -Enomem;
+	}
 	/* the target socket marker: NOT in /srv - devsrv files are
 	 * fd-sharing entries, readers get a dup of the writer's fd
 	 * instead of the content.  The marker sits beside the server's
@@ -1878,7 +1946,8 @@ sscanf2(char *s, char *a, int na, char *b, int nb)
 static long
 sysaccept(void)
 {
-	char buf[4096], target[64];
+	static char buf[65536];
+	char target[64];
 	int fd, n, cpid, cseq, rf, wf;
 	char *p;
 
@@ -1997,7 +2066,7 @@ sysaccept(void)
 static int
 listenqueued(void)
 {
-	char buf[4096];
+	static char buf[65536];
 	char *p, *q;
 	int fd, n, cpid;
 
@@ -3739,6 +3808,13 @@ dosyscall(Ureg *ur)
 			int i;
 
 			i = sockslot((int)a1);
+			{
+				static int zd;
+
+				if(zd++ < 40 && i >= 0)
+					fprint(2, "linuxrun: DUP p%d %lux->%d pipes=%lux\n",
+						getpid(), a1, r, sockmap[i][2]);
+			}
 			if(i >= 0)
 				sockmapfd(r, sockmap[i][2]);
 		}

@@ -1,0 +1,23 @@
+#!/bin/rc
+# Rebuild linuxrun in-VM (XWR full-write probe), then WM-first run:
+# Xvfb -> xfwm4 -> xeyes fresh -> xwd capture.
+rc /cfg/q9/build-all.rc
+echo build-phase-done
+sleep 30
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /debian/rootfs/tmp/n12-xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' >[2=1] /debian/rootfs/tmp/n12-xfwm4.log &
+sleep 240
+echo wm-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2=1] /debian/rootfs/tmp/n12-xeyes.log &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot12.xwd' >[2] /debian/rootfs/tmp/n12-xwd.log &
+sleep 900
+echo shot-try1
+ls -l /debian/rootfs/tmp/shot12.xwd
+cp /debian/rootfs/tmp/shot12.xwd /debian/rootfs/shot1.xwd
+echo xfce-shot-done

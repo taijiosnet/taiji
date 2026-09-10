@@ -1,0 +1,20 @@
+#!/bin/rc
+# GTK discriminator: xfce4-panel is a plain GTK3 client (not a WM).
+# sees a live MapRequest — testing event-driven adoption end to end.
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /debian/rootfs/tmp/n11-xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xfce4-panel --display :0' >[2=1] /debian/rootfs/tmp/n11-panel.log &
+sleep 240
+echo wm-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2=1] /debian/rootfs/tmp/n11-xeyes.log &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot11.xwd' >[2] /debian/rootfs/tmp/n11-xwd.log &
+sleep 900
+echo shot-try1
+ls -l /debian/rootfs/tmp/shot11.xwd
+cp /debian/rootfs/tmp/shot11.xwd /debian/rootfs/shot1.xwd
+echo xfce-shot-done

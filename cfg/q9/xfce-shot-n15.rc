@@ -1,0 +1,28 @@
+#!/bin/rc
+# Rebuild linuxrun in-VM (sysconnect diagnostics + 64KB /srv scans), then
+# dbus-first + Xvfb + xeyes + xfwm4 (30 min) + xwd capture.
+rc /cfg/q9/build-all.rc
+echo build-phase-done
+sleep 30
+rm -f /debian/rootfs/tmp/dbus-1 /debian/rootfs/tmp/dbus-1.req
+rm -f /debian/rootfs/tmp/*.t.* /debian/rootfs/tmp/dbus-1.t.*
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 20
+echo dbus-phase
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 60
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+sleep 1800
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot15.xwd' &
+sleep 900
+echo shot-try1
+ls -l /debian/rootfs/tmp/shot15.xwd
+cp /debian/rootfs/tmp/shot15.xwd /debian/rootfs/shot1.xwd
+echo xfce-shot-done

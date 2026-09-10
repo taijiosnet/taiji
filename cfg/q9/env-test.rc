@@ -1,0 +1,4 @@
+#!/bin/rc
+debian-session -c 'linuxrun /bin/sh -c set' >[2] /debian/rootfs/tmp/env-test.log &
+sleep 60
+echo env-test-done
