@@ -1,0 +1,28 @@
+#!/bin/rc
+# Warm fontconfig caches once (persistent in the rootfs), then the
+# long-window xfwm4 run with periodic screenshots.
+debian-session -c 'linuxrun /usr/bin/fc-cache -f' &
+sleep 2400
+echo fccache-phase-done
+rm -f /debian/rootfs/tmp/dbus-1 /debian/rootfs/tmp/dbus-1.req
+rm -f /debian/rootfs/tmp/*.t.*
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 20
+echo dbus-phase
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24 -extension GLX' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 60
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+for(i in 1 2 3 4 5 6 7 8 9 a b){
+	sleep 1200
+	echo shot-cycle-$i
+	debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot18.'^$i^'.xwd' &
+	sleep 300
+	echo cycle-$i-done
+}
+echo xfce-shot-done

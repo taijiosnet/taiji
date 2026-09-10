@@ -235,6 +235,11 @@ char *genv[] = {
 	/* GTK3 X11 probes GLX for every window; under the emulator the
 	 * probe's GL teardown retries forever, so skip client GL here */
 	"GDK_GL=disable",
+	/* the at-spi a11y bridge opens extra display connections and
+	 * retries the accessibility bus forever under the emulator
+	 * (three X connects per process + a dbus SO_PEERCRED churn
+	 * loop that never completes) - disable it */
+	"NO_AT_BRIDGE=1",
 	nil,};
 
 /* epoll: a table of registered fds per epoll fd; wait reports every
@@ -575,6 +580,19 @@ static void sockpredrain(void);
  * return made libxtrans abandon half-written replies - the client
  * then waits forever for the rest of a big reply */
 static void drainpeers(int);
+static int peerqlen(int);
+
+/* eventfd write: a wakeup is only meaningful when none is pending
+ * (the counter semantics coalesce), so when the pipe already holds
+ * data the new value is discarded instead of ever risking a blocking
+ * write on the tiny pipe buffer */
+static long
+efdwr(int fd, void *buf, long n)
+{
+	if(peerqlen(fd) > 0)
+		return n;
+	return -2;	/* caller falls through to the normal write */
+}
 
 /* consume everything queued on a pipe without blocking */
 static void
@@ -608,25 +626,50 @@ sockwr(int fd, void *buf, long n)
 {
 	long w, done;
 	char es[ERRMAX];
+	int nint;
 
 	done = 0;
+	nint = 0;
 	while(done < n){
+		/* never enter a blocking write on a full wakeup pipe: a
+		 * swallowed alarm note makes plan9 RESUME the write, so
+		 * the one alarm per arming leaves it stuck forever */
+		{
+			int ql;
+
+			/* eventfd counter semantics coalesce wakeups, so a pipe holding
+			 * more than one 8-byte wakeup is over-queued and safe
+			 * to collapse (real eventfds never hold more than 8) */
+			if(nint < 200 && (ql = peerqlen(fd)) > 16){
+				nint++;
+				drainpeers(fd);
+				sleep(100);
+				continue;
+			}
+		}
 		alarm(3000);
 		while((w = write(fd, (char*)buf+done, n-done)) < 0){
 			errstr(es, sizeof es);
-			if(strcmp(es, "interrupted") == 0){
+			if(strcmp(es, "interrupted") == 0 && nint < 40){
 				/* a full wakeup-style pipe whose reader
 				 * never drains it would freeze the writer
 				 * forever: drain the peer end so the write
 				 * can proceed (eventfd semantics tolerate
-				 * counter loss) */
+				 * counter loss).  Bounded retries with a
+				 * pause - a raw drain/retry loop livelocked
+				 * at full CPU when the drain freed nothing */
+				nint++;
 				alarm(0);
 				drainpeers(fd);
+				sleep(100);
 				alarm(3000);
 				continue;
 			}
 			alarm(0);
-			return -1;
+			if(nint >= 40)
+				fprint(2, "linuxrun: WTIMEO p%d fd=%d n=%ld\n",
+					getpid(), fd, n);
+			return nint >= 40 ? -11 : -1;
 		}
 		alarm(0);
 		if(w < n-done){
@@ -1061,6 +1104,29 @@ initsysinfo(void)
  * poll() and recv() unchanged. */
 #define NSOCK 16
 int sockmap[NSOCK][4];	/* [i]: guest fd, active, packed, nonblocking */
+char isefd[NSOCK];	/* eventfd-style wakeup pipe: safe to drain */
+
+/* queued bytes on the read end of an EVENTFD pipe whose write side is
+ * fd, or -1 when fd is not an eventfd stand-in (socket pipes must never
+ * be drained: their queue is live protocol data) */
+static int
+peerqlen(int fd)
+{
+	int i;
+	Dir *d;
+	int q;
+
+	q = -1;
+	for(i = 0; i < NSOCK; i++)
+		if(sockmap[i][1] && (sockmap[i][2] & 0xffff) == fd){
+			if(isefd[i] && (d = dirfstat(sockmap[i][2] >> 16)) != nil){
+				q = d->length;
+				free(d);
+			}
+			break;
+		}
+	return q;
+}
 
 /* a write to a full wakeup pipe must not freeze the writer: drain the
  * peer end of the bridge socket whose write side is fd */
@@ -1071,7 +1137,8 @@ drainpeers(int fd)
 
 	for(i = 0; i < NSOCK; i++)
 		if(sockmap[i][1] && (sockmap[i][2] & 0xffff) == fd){
-			drainfd(sockmap[i][2] >> 16);
+			if(isefd[i])
+				drainfd(sockmap[i][2] >> 16);
 			break;
 		}
 }
@@ -1496,7 +1563,8 @@ sockslot(int fd)
 						sockmap[s][0] = fd;
 						sockmap[s][1] = 1;
 						sockmap[s][2] = (rf<<16) | wf;
-						sockmap[s][3] = fl;
+						sockmap[s][3] = fl & 1;
+						isefd[s] = (fl & 2) ? 1 : 0;
 						soeof[s] = 0;
 						inqn[s] = 0;
 						fprint(2, "linuxrun: ADOPT p%d fd=%d from tgid=%d\n",
@@ -1611,7 +1679,13 @@ socknewslot(ulong packed)
 			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
 			pf = create(nb, OWRITE|OTRUNC, 0666);
 			if(pf >= 0){
-				fprint(pf, "0 %lux", packed);
+				int efd, ei;
+
+				efd = 0;
+				for(ei = 0; ei < NSOCK; ei++)
+					if(sockmap[ei][1] && sockmap[ei][0] == fd && isefd[ei])
+						efd = 1;
+				fprint(pf, "%d %lux", efd ? 2 : 0, packed);
 				close(pf);
 			}
 		}
@@ -1859,7 +1933,7 @@ sysconnect(ulong path)
 	{
 		static int zsq;
 
-		if(zsq++ < 40 && path != 0){
+		if(zsq++ < 400 && path != 0){
 			int sb;
 
 			fprint(2, "linuxrun: CONN p%d addr:", getpid());
@@ -1879,7 +1953,7 @@ sysconnect(ulong path)
 	if(access(buf, AEXIST) < 0){
 		static int zc;
 
-		if(zc++ < 10)
+		if(zc++ < 400)
 			fprint(2, "linuxrun: CONNECT p%d refused %s (no .req)\n",
 				getpid(), (char*)path);
 		return -Enoent;
@@ -1940,7 +2014,7 @@ sysconnect(ulong path)
 		 * copy instead of sharing the channel */
 		dc = dirfstat(c2s[0]);
 		dd = dirfstat(s2c[1]);
-		if(zk++ < 10)
+		if(zk++ < 400)
 			fprint(2, "linuxrun: CONNECT p%d queued %s a=%llux.%lux b=%llux.%lux\n",
 				getpid(), (char*)path,
 				dc ? (vlong)dc->qid.path : 0, dc ? (ulong)dc->qid.vers : 0,
@@ -2284,9 +2358,9 @@ dosocketcall(ulong subop, ulong argsp)
 			*(int*)(a[3]+8) = 0;
 			if(a[4] > 0x10000)
 				*(int*)a[4] = 12;
-			if(zp++ < 10)
-				fprint(2, "linuxrun: PEERCRED p%d -> pid=%d uid=0\n",
-					getpid(), *(int*)a[3]);
+			if(zp++ < 200)
+				fprint(2, "linuxrun: PEERCRED p%d fd=%d -> pid=%d uid=0\n",
+					getpid(), (int)a[0], *(int*)a[3]);
 			r = 0;
 			break;
 		}
@@ -2329,9 +2403,19 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 9:		/* send(fd,a1=buf,a2=len) */
 	case 11:	/* sendto(fd,a1,a2,a3,a4) */
-		if(sockslot((int)a[0]) >= 0)
-			sockpredrain();
-		r = sockwr(sockwritefd((int)a[0]), (void*)a[1], a[2]);
+		{
+			int sslot;
+
+			sslot = sockslot((int)a[0]);
+			if(sslot >= 0 && isefd[sslot]){
+				r = efdwr(sockwritefd((int)a[0]), (void*)a[1], a[2]);
+				if(r != -2)
+					break;
+			}
+			if(sslot >= 0)
+				sockpredrain();
+			r = sockwr(sockwritefd((int)a[0]), (void*)a[1], a[2]);
+		}
 		if(r > 0)
 			sockopc(sockslot((int)a[0]), (void*)a[1], r, 1);
 		if(r < 0)
@@ -2763,9 +2847,19 @@ dosyscall(Ureg *ur)
 	 * off pipes entirely: a shared-memory ring that both endpoint
 	 * processes can poll and drain without ever blocking. */
 	case 4:		/* write */
-		if(sockslot((int)a1) >= 0)
-			sockpredrain();
-		r = sockwr(sockwritefd((int)a1), (void*)a2, a3);
+		{
+			int wslot;
+
+			wslot = sockslot((int)a1);
+			if(wslot >= 0 && isefd[wslot]){
+				r = efdwr(sockwritefd((int)a1), (void*)a2, a3);
+				if(r != -2)
+					break;
+			}
+			if(wslot >= 0)
+				sockpredrain();
+			r = sockwr(sockwritefd((int)a1), (void*)a2, a3);
+		}
 		if(r > 0)
 			sockopc(sockslot((int)a1), (void*)a2, r, 1);
 		if(r < 0)
@@ -3385,8 +3479,11 @@ dosyscall(Ureg *ur)
 
 			if(pipe(p) < 0)
 				r = -Enomem;
-			else
+			else{
 				r = socknewslot((p[0]<<16) | p[1]);
+				if(r >= 0 && r < NSOCK)
+					isefd[r] = 1;
+			}
 		}
 		break;
 	case 2:		/* fork */
@@ -3599,9 +3696,9 @@ dosyscall(Ureg *ur)
 			*(int*)(a4+8) = 0;
 			if(a5 > 0x10000)
 				*(int*)a5 = 12;
-			if(zq++ < 10)
-				fprint(2, "linuxrun: PEERCRED p%d -> pid=%d uid=0\n",
-					getpid(), *(int*)a4);
+			if(zq++ < 200)
+				fprint(2, "linuxrun: PEERCRED p%d fd=%d -> pid=%d uid=0\n",
+					getpid(), (int)a1, *(int*)a4);
 			r = 0;
 			break;
 		}
@@ -4122,8 +4219,11 @@ dosyscall(Ureg *ur)
 
 			if(pipe(p) < 0)
 				r = -Enomem;
-			else
+			else{
 				r = socknewslot((p[0]<<16) | p[1]);
+				if(r >= 0 && r < NSOCK)
+					isefd[r] = 1;
+			}
 		}
 		break;
 		case 406:	/* clock_nanosleep_time64(clk, flags, req64, rem64):
@@ -4415,6 +4515,24 @@ traphandler(void *v, char *msg)
 	if(v == nil)
 		return 0;
 	ur = v;
+	if(msg != nil && strcmp(msg, "alarm") == 0){
+		/* the dispatcher re-arms a 60s alarm on every syscall: a
+		 * guest stuck in pure userspace (no syscalls at all) is
+		 * finally visible here - the interrupted context names
+		 * the spin */
+		static int za;
+
+		if(za++ < 10){
+			int i;
+
+			fprint(2, "linuxrun: ALARMSPIN p%d pc=%lux sp=%lux bp=%lux ax=%lux bx=%lux cx=%lux\n",
+				getpid(), ur->pc, ur->sp, ur->bp, ur->ax, ur->bx, ur->cx);
+			for(i = 0; i < 16; i++)
+				fprint(2, "linuxrun:  sp+%d = %lux\n", i*4,
+					*(ulong*)(ur->sp + i*4));
+		}
+		return 1;
+	}
 	if(msg != nil && strstr(msg, "write on closed pipe") != nil){
 		/* Linux programs expect write() to fail with EPIPE
 		 * (every toolkit ignores SIGPIPE); letting this note
@@ -4464,6 +4582,7 @@ traphandler(void *v, char *msg)
 		}
 		ur->ax = dosyscall(ur);
 		ur->pc += 2;
+		alarm(60000);
 		return 1;
 	}
 	if(ur->trap != TrapUD){
@@ -4703,6 +4822,7 @@ traphandler(void *v, char *msg)
 	ur->pc += 2;
 	if(tlsfsokay)
 		ur->fs = tlsselector;
+	alarm(60000);
 	return 1;
 }
 
