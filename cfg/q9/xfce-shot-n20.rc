@@ -1,0 +1,42 @@
+#!/bin/rc
+# xfwm4 full run: rebuild linuxrun, dbus-first, GLX-off Xvfb, xeyes,
+# xfwm4 with a long window and static screenshot cycles (the rc
+# for-loop concatenation proved unreliable - keep it flat).
+rc /cfg/q9/build-all.rc
+echo build-phase-done
+sleep 20
+rm -f /debian/rootfs/tmp/dbus-1 /debian/rootfs/tmp/dbus-1.req
+rm -f /debian/rootfs/tmp/*.t.*
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 20
+echo dbus-phase
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24 -extension GLX' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 60
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+sleep 1200
+echo shot-cycle-1
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot20.1.xwd' &
+sleep 300
+echo cycle-1-done
+sleep 900
+echo shot-cycle-2
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot20.2.xwd' &
+sleep 300
+echo cycle-2-done
+sleep 900
+echo shot-cycle-3
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot20.3.xwd' &
+sleep 300
+echo cycle-3-done
+sleep 900
+echo shot-cycle-4
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot20.4.xwd' &
+sleep 300
+echo cycle-4-done
+echo xfce-shot-done

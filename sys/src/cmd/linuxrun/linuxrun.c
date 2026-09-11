@@ -589,6 +589,11 @@ static int peerqlen(int);
 static long
 efdwr(int fd, void *buf, long n)
 {
+	static int ze;
+
+	if(ze++ < 60)
+		fprint(2, "linuxrun: EFDDBG p%d fd=%d n=%ld ql=%d\n",
+			getpid(), fd, n, peerqlen(fd));
 	if(peerqlen(fd) > 0)
 		return n;
 	return -2;	/* caller falls through to the normal write */
@@ -692,7 +697,7 @@ sockwr(int fd, void *buf, long n)
 static void sockopc(int, void*, long, int);
 static void dumpopc(void);
 static int sockslot(int);
-static int socknewslot(ulong);
+static int socknewslot(ulong, int);
 static int sockinready(int);
 extern int sockmap[16][4];
 static int postsrvfd(char*, int);
@@ -748,6 +753,8 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 
 	v = (struct Liovec*)iov;
 	slot = sockslot((int)fd);
+	if(slot >= 0 && sockmap[slot][2] == 0)
+		return -107;	/* -ENOTCONN: never write fd 0 for these */
 	if(slot >= 0)
 		sockpredrain();
 	fd = sockwritefd((int)fd);
@@ -826,7 +833,7 @@ ptymaster(void)
 			if(pipe(ptytab[i].m2s) < 0 || pipe(ptytab[i].s2m) < 0)
 				return -1;
 			ptytab[i].inuse = 1;
-			ptytab[i].masterg = socknewslot((ptytab[i].s2m[0]<<16) | ptytab[i].m2s[1]);
+			ptytab[i].masterg = socknewslot((ptytab[i].s2m[0]<<16) | ptytab[i].m2s[1], 0);
 			if(ptytab[i].masterg < 0){
 				ptytab[i].inuse = 0;
 				return -1;
@@ -842,7 +849,7 @@ ptyslave(int n)
 {
 	if(n < 0 || n >= NPTY || !ptytab[n].inuse)
 		return -1;
-	return socknewslot((ptytab[n].m2s[0]<<16) | ptytab[n].s2m[1]);
+	return socknewslot((ptytab[n].m2s[0]<<16) | ptytab[n].s2m[1], 0);
 }
 
 static int
@@ -1541,6 +1548,13 @@ sockslot(int fd)
 				rf = open(nb, OREAD);
 				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key0, fd);
 				wf = open(nb, OWRITE);
+				if(rf < 0 || wf < 0){
+					static int zaf;
+
+					if(zaf++ < 40)
+						fprint(2, "linuxrun: ADOPTFAIL p%d %s rf=%d wf=%d: %r\n",
+							getpid(), nb, rf, wf);
+				}
 				if(rf >= 0 && wf >= 0){
 					for(s = 0; s < NSOCK; s++)
 						if(!sockmap[s][1])
@@ -1636,7 +1650,7 @@ sockmapfd(int fd, ulong packed)
 }
 
 static int
-socknewslot(ulong packed)
+socknewslot(ulong packed, int efd)
 {
 	int i, fd;
 
@@ -1665,6 +1679,9 @@ socknewslot(ulong packed)
 		sockmap[i][1] = 1;
 		sockmap[i][2] = packed;
 		sockmap[i][3] = 0;
+		isefd[i] = efd;	/* BEFORE the publication below: the
+				 * .f marker's flag bit must already
+				 * reflect it or adopters lose the trait */
 		/* same /srv publication as sockmapfd: accepted and
 		 * socketpair-ish connections go through here */
 		{
@@ -1714,6 +1731,20 @@ sockwritefd(int fd)
 	if(i >= 0)
 		return sockmap[i][2] & 0xffff;
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
+}
+
+/* Linux: write/send on a socket that was never connected (or whose
+ * connect was refused) fails with ENOTCONN immediately.  Our unconnected
+ * slots carry packed==0, whose low half is host fd 0 - writing there
+ * pushed gdbus retry data into stdin and could block on the console.
+ * Callers must consult this before sockwr. */
+static int
+sockunconn(int fd)
+{
+	int i;
+
+	i = sockslot(fd);
+	return i >= 0 && sockmap[i][2] == 0;
 }
 
 /* the alarm note guards the 1-byte EOF probe below.  If the note
@@ -2314,7 +2345,7 @@ dosocketcall(ulong subop, ulong argsp)
 			r = -Eacces;
 			break;
 		}
-		r = socknewslot(0);
+		r = socknewslot(0, 0);
 		if(r < 0)
 			r = -Enomem;
 		break;
@@ -2375,7 +2406,7 @@ dosocketcall(ulong subop, ulong argsp)
 		if(r >= 0x10000){
 			int ns;
 
-			ns = socknewslot(r);
+			ns = socknewslot(r, 0);
 			if(ns < 0)
 				r = -Enomem;
 			else
@@ -2407,6 +2438,14 @@ dosocketcall(ulong subop, ulong argsp)
 			int sslot;
 
 			sslot = sockslot((int)a[0]);
+			if(sslot >= 0 && sockmap[sslot][2] == 0){
+				static int zu2;
+
+				if(zu2++ < 20)
+					fprint(2, "linuxrun: WUNCONN p%d fd=%lux\n", getpid(), a[0]);
+				r = -107;	/* -ENOTCONN */
+				break;
+			}
 			if(sslot >= 0 && isefd[sslot]){
 				r = efdwr(sockwritefd((int)a[0]), (void*)a[1], a[2]);
 				if(r != -2)
@@ -2851,6 +2890,25 @@ dosyscall(Ureg *ur)
 			int wslot;
 
 			wslot = sockslot((int)a1);
+			if(wslot < 0){
+				static int zrw;
+				char rb[64];
+				int rkey;
+
+				rkey = guestprocid ? (int)guestprocid : getpid();
+				snprint(rb, sizeof rb, "/srv/x.m.%d.%d.f", rkey, (int)a1);
+				if(access(rb, AEXIST) >= 0 && zrw++ < 40)
+					fprint(2, "linuxrun: RAWW p%d fd=%lux (marker exists, not adopted)\n",
+						getpid(), a1);
+			}
+			if(wslot >= 0 && sockmap[wslot][2] == 0){
+				static int zu;
+
+				if(zu++ < 20)
+					fprint(2, "linuxrun: WUNCONN p%d fd=%lux\n", getpid(), a1);
+				r = -107;	/* -ENOTCONN */
+				break;
+			}
 			if(wslot >= 0 && isefd[wslot]){
 				r = efdwr(sockwritefd((int)a1), (void*)a2, a3);
 				if(r != -2)
@@ -2921,22 +2979,20 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
-	case 6:		/* close */
+	case 6:		/* close: do NOT remove the /srv x.m markers -
+		 * they are keyed by the THREAD-GROUP id, so a sibling
+		 * thread closing its copy of the fd (or a transient
+		 * socket reusing the number) yanked the entries out
+		 * from under processes that still needed them for
+		 * adoption; their writes then fell through to raw host
+		 * fds and froze (ADOPTFAIL 'file does not exist').
+		 * Entries leak per session instead - bounded by the
+		 * socket count, the 64K scans absorb that */
 		{
 			int i;
 
 			i = sockslot((int)a1);
 			if(i >= 0){
-				char nb[64];
-				int key;
-
-				key = guestprocid ? (int)guestprocid : getpid();
-				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, (int)a1);
-				remove(nb);
-				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, (int)a1);
-				remove(nb);
-				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, (int)a1);
-				remove(nb);
 				close(sockmap[i][2] >> 16);
 				close(sockmap[i][2] & 0xffff);
 				sockmap[i][1] = 0;
@@ -3480,9 +3536,7 @@ dosyscall(Ureg *ur)
 			if(pipe(p) < 0)
 				r = -Enomem;
 			else{
-				r = socknewslot((p[0]<<16) | p[1]);
-				if(r >= 0 && r < NSOCK)
-					isefd[r] = 1;
+				r = socknewslot((p[0]<<16) | p[1], 1);
 			}
 		}
 		break;
@@ -3581,15 +3635,44 @@ dosyscall(Ureg *ur)
 				exits("fork child");	/* not reached */
 			}else{
 				/* hold the shared note stack until the child
-				 * has finished on its own */
+				 * has finished on its own.  The wait is a
+				 * polled, BOUNDED one: a blocking read here
+				 * cannot be interrupted (a swallowed alarm
+				 * note makes plan9 resume it), so a child
+				 * that dies before releasing would park the
+				 * parent forever - the WM died exactly this
+				 * way after claiming WM_S0 */
 				if(forkready[0] >= 0){
 					char b[1];
+					int waited;
 					static int z;
 
 					close(forkready[1]);
 					if(z++ < 10)
 						fprint(2, "linuxrun: FPARK p%d waiting forkready\n", getpid());
-					read(forkready[0], b, 1);
+					waited = 0;
+					for(;;){
+						int rr;
+						Dir *d;
+
+						if((d = dirfstat(forkready[0])) != nil){
+							int ql;
+
+							ql = d->length;
+							free(d);
+							if(ql > 0){
+								rr = read(forkready[0], b, 1);
+								if(rr == 1)
+									break;
+							}
+						}
+						if(++waited > 2400){
+							fprint(2, "linuxrun: FPARKTIMEO p%d child=%d lost\n",
+								getpid(), pid);
+							break;
+						}
+						sleep(50);
+					}
 					close(forkready[0]);
 				}
 				r = pid;
@@ -3654,7 +3737,7 @@ dosyscall(Ureg *ur)
 			r = -Eacces;
 			break;
 		}
-		r = socknewslot(0);
+		r = socknewslot(0, 0);
 		if(r < 0)
 			r = -Enomem;
 		break;
@@ -3713,7 +3796,7 @@ dosyscall(Ureg *ur)
 		if(r >= 0x10000){
 			int ns;
 
-			ns = socknewslot(r);
+			ns = socknewslot(r, 0);
 			if(ns < 0)
 				r = -Enomem;
 			else
@@ -4220,9 +4303,7 @@ dosyscall(Ureg *ur)
 			if(pipe(p) < 0)
 				r = -Enomem;
 			else{
-				r = socknewslot((p[0]<<16) | p[1]);
-				if(r >= 0 && r < NSOCK)
-					isefd[r] = 1;
+				r = socknewslot((p[0]<<16) | p[1], 1);
 			}
 		}
 		break;
