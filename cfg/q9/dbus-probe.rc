@@ -1,0 +1,10 @@
+#!/bin/rc
+# Minimal cross-process dbus bridge reproducer: daemon + dbus-send.
+rm -f /debian/rootfs/tmp/dbus-1 /debian/rootfs/tmp/dbus-1.req
+rm -f /debian/rootfs/tmp/*.t.*
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 20
+echo dbus-up
+debian-session -c 'linuxrun /bin/sh /tmp/dsend.sh' &
+sleep 420
+echo dbus-probe-done

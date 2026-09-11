@@ -240,6 +240,11 @@ char *genv[] = {
 	 * (three X connects per process + a dbus SO_PEERCRED churn
 	 * loop that never completes) - disable it */
 	"NO_AT_BRIDGE=1",
+	/* glib's own dbus/auth/connection state trace to stderr (picked
+	 * up by the ERRWR probe) - the WM's SASL stops after the \0
+	 * byte and never sends the AUTH line */
+	"GDBUS_DEBUG=authentication,address,transport",
+	"G_MESSAGES_DEBUG=all",
 	nil,};
 
 /* epoll: a table of registered fds per epoll fd; wait reports every
@@ -702,6 +707,8 @@ static int sockinready(int);
 extern int sockmap[16][4];
 static int postsrvfd(char*, int);
 
+static ulong sockrawqlen(int);
+
 /* sendmsg: a msghdr carries msg_iov at offset 8, msg_iovlen at 12 */
 static long
 syssendmsg(ulong fd, ulong mh)
@@ -713,6 +720,20 @@ syssendmsg(ulong fd, ulong mh)
 	m = (ulong*)mh;
 	if(m[2] < 0x10000)
 		return -Efault;
+	{
+		static int zs;
+		struct Liovec *sv;
+		int sb;
+
+		if(zs++ < 60 && m[2] > 0x10000){
+			sv = (struct Liovec*)m[2];
+			fprint(2, "linuxrun: SMSG p%d fd=%lux iov=%lux n=%lux:",
+				getpid(), fd, m[2], m[3]);
+			for(sb = 0; sb < 20 && sb < (int)sv[0].len; sb++)
+				fprint(2, " %2.2ux", ((uchar*)sv[0].base)[sb]);
+			fprint(2, "\n");
+		}
+	}
 	return syswritev(fd, m[2], m[3]);
 }
 
@@ -753,6 +774,19 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 
 	v = (struct Liovec*)iov;
 	slot = sockslot((int)fd);
+	{
+		static int zw;
+
+		if(zw++ < 50 && cnt > 0 && cnt < 8 && v[0].len > 0 && v[0].len < 4096 && iov > 0x10000){
+			int zb;
+
+			fprint(2, "linuxrun: WRV p%d fd=%lux slot=%d n=%lux b:",
+				getpid(), fd, slot, v[0].len);
+			for(zb = 0; zb < 12 && zb < (int)v[0].len; zb++)
+				fprint(2, " %2.2ux", ((uchar*)v[0].base)[zb]);
+			fprint(2, "\n");
+		}
+	}
 	if(slot >= 0 && sockmap[slot][2] == 0)
 		return -107;	/* -ENOTCONN: never write fd 0 for these */
 	if(slot >= 0)
@@ -767,6 +801,15 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 		if(v[i].len == 0)
 			continue;
 		n = sockwr((int)fd, v[i].base, v[i].len);
+		{
+			static int zwq;
+			int ws;
+
+			ws = sockslot((int)fd);
+			if(v[i].len <= 4 && zwq++ < 60 && ws >= 0 && sockmap[ws][2] != 0)
+				fprint(2, "linuxrun: WCHK p%d gfd=%lux wrote=%ld qlen-read-end=%d\n",
+					getpid(), fd, n, sockrawqlen(ws));
+		}
 		if(n < 0){
 			if(total > 0)
 				break;	/* report the partial write */
@@ -2361,8 +2404,14 @@ dosocketcall(ulong subop, ulong argsp)
 			int i;
 
 			i = sockslot(a[0]);
-			if(i >= 0)
+			if(i >= 0){
+				static int zc3;
+
+				if(zc3++ < 60)
+					fprint(2, "linuxrun: CSTORE p%d gfd=%lux slot=%d packed=%lux\n",
+						getpid(), a[0], i, r);
 				sockmap[i][2] = r;
+			}
 		}
 		break;
 	case 6:		/* getsockname(fd,name,namelen) */
@@ -3343,10 +3392,20 @@ dosyscall(Ureg *ur)
 				for(i = 0; i < Maxep; i++)
 					eptab[i].epfd = -1;
 			}
-			if(a2 == 2){	/* EPOLL_CTL_DEL: a2 is the op code */
-				for(i = 0; i < Maxep; i++)
-					if(eptab[i].epfd == (int)a1 && eptab[i].fd == (int)a3)
-						eptab[i].epfd = -1;
+			if(a2 == 2){	/* EPOLL_CTL_DEL: a2 is the op code.
+					 * KEEP the entry: libdbus registers
+					 * the SAME fd as separate read and
+					 * write watches, so the write
+					 * watch's DEL right after the read
+					 * watch's ADD erased all interest -
+					 * dbus-daemon then never serviced
+					 * the fresh client and its auth
+					 * timeout killed the connection.
+					 * Reporting events for a deleted fd
+					 * is a (legal) spurious wakeup; the
+					 * dispatcher re-checks and moves
+					 * on, while a lost read interest
+					 * is unrecoverable */
 				r = 0;
 				break;
 			}
@@ -3410,12 +3469,23 @@ dosyscall(Ureg *ur)
 				/* connected bridge sockets: EPOLLIN only
 				 * when the pipe holds data, else the
 				 * server reads before the client has sent
-				 * anything and both ends block */
+				 * anything and both ends block.  Readiness
+				 * is reported DATA-DRIVEN regardless of
+				 * the registered mask: libdbus splits the
+				 * same fd into separate read/write watches
+				 * and collapses to one entry here, so a
+				 * write-only registration would otherwise
+				 * hide readable data forever (the daemon
+				 * then starved the client and its auth
+				 * timeout killed the connection).  Extra
+				 * events are legal spurious wakeups. */
 				evv = eptab[i].events & 0xffffffff;
 				slot = sockslot((int)eptab[i].fd);
-				if(slot >= 0 && sockmap[slot][2] != 0 &&
-				    (evv & 1) && sockinready((int)eptab[i].fd) <= 0)
-					evv &= ~1;
+				if(slot >= 0 && sockmap[slot][2] != 0){
+					evv = 4;	/* EPOLLOUT always */
+					if(sockinready((int)eptab[i].fd) > 0)
+						evv |= 1;
+				}
 				if(slot < 0 && (evv & 1)){
 					/* a raw fd (pipe() stand-ins are
 					 * unregistered): report EPOLLIN
@@ -3753,8 +3823,14 @@ dosyscall(Ureg *ur)
 			int i;
 
 			i = sockslot(a1);
-			if(i >= 0)
+			if(i >= 0){
+				static int zc4;
+
+				if(zc4++ < 60)
+					fprint(2, "linuxrun: CSTORE p%d gfd=%lux slot=%d packed=%lux\n",
+						getpid(), a1, i, r);
 				sockmap[i][2] = r;
+			}
 		}
 		break;
 	case 363:	/* listen (direct) */
@@ -4146,8 +4222,14 @@ dosyscall(Ureg *ur)
 			int i;
 
 			i = sockslot((int)a1);
-			if(i >= 0)
+			if(i >= 0){
+				static int zd2;
+
+				if(zd2++ < 60)
+					fprint(2, "linuxrun: DUP2STORE p%d %lux->%lux packed=%lux\n",
+						getpid(), a1, a2, sockmap[i][2]);
 				sockmapfd(r, sockmap[i][2]);
+			}
 		}
 		break;
 	case 330:	/* dup3: flags ignored */
