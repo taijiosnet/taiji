@@ -638,6 +638,17 @@ sockwr(int fd, void *buf, long n)
 	char es[ERRMAX];
 	int nint;
 
+	{
+		static int zpk;
+		Dir *d;
+
+		if(zpk++ < 60 && n == 1 && (d = dirfstat(fd)) != nil){
+			fprint(2, "linuxrun: PRECHK p%d wfd=%d n=%ld q=%llux.%lux len=%llux\n",
+				getpid(), fd, n,
+				(vlong)d->qid.path, (ulong)d->qid.vers, (vlong)d->length);
+			free(d);
+		}
+	}
 	done = 0;
 	nint = 0;
 	while(done < n){
@@ -777,7 +788,7 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 	{
 		static int zw;
 
-		if(zw++ < 50 && cnt > 0 && cnt < 8 && v[0].len > 0 && v[0].len < 4096 && iov > 0x10000){
+		if(zw++ < 50 && cnt > 0 && v[0].len == 1 && iov > 0x10000){
 			int zb;
 
 			fprint(2, "linuxrun: WRV p%d fd=%lux slot=%d n=%lux b:",
@@ -806,7 +817,7 @@ syswritev(ulong fd, ulong iov, ulong cnt)
 			int ws;
 
 			ws = sockslot((int)fd);
-			if(v[i].len <= 4 && zwq++ < 60 && ws >= 0 && sockmap[ws][2] != 0)
+			if(v[i].len == 1 && zwq++ < 60 && ws >= 0 && sockmap[ws][2] != 0)
 				fprint(2, "linuxrun: WCHK p%d gfd=%lux wrote=%ld qlen-read-end=%d\n",
 					getpid(), fd, n, sockrawqlen(ws));
 		}
@@ -1533,7 +1544,7 @@ sockslot(int fd)
 						fp++;
 					while(*fp >= '0' && *fp <= '9')
 						live = live*10 + *fp++ - '0';
-					if(live != 0 && live != sockmap[i][2]){
+					if(live != 0 && live != sockmap[i][2] && (live >> 16) > 2 && (live & 0xffff) > 2){
 						int rf2, wf2;
 
 						snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
@@ -1679,14 +1690,22 @@ sockmapfd(int fd, ulong packed)
 
 		key = guestprocid ? (int)guestprocid : getpid();
 		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
-		postsrvfd(nb, packed >> 16);
-		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
-		postsrvfd(nb, packed & 0xffff);
-		snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
-		pf = create(nb, OWRITE|OTRUNC, 0666);
-		if(pf >= 0){
-			fprint(pf, "0 %lux", packed);
-			close(pf);
+		/* unconnected slots (packed==0) publish NOTHING: the
+		 * markers would carry fd numbers <= 2, and reading a
+		 * marker dups that fd - the stale-hit refresh then
+		 * read stdin forever inside sockslot and froze the
+		 * writer mid-sendmsg (the WM died exactly there on
+		 * every dbus \0) */
+		if(packed != 0){
+			postsrvfd(nb, packed >> 16);
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
+			postsrvfd(nb, packed & 0xffff);
+			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
+			pf = create(nb, OWRITE|OTRUNC, 0666);
+			if(pf >= 0){
+				fprint(pf, "0 %lux", packed);
+				close(pf);
+			}
 		}
 	}
 	return j;
@@ -1731,22 +1750,24 @@ socknewslot(ulong packed, int efd)
 			char nb[64];
 			int key, pf;
 
-			key = guestprocid ? (int)guestprocid : getpid();
-			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
-			postsrvfd(nb, packed >> 16);
-			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
-			postsrvfd(nb, packed & 0xffff);
-			snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
-			pf = create(nb, OWRITE|OTRUNC, 0666);
-			if(pf >= 0){
-				int efd, ei;
+			if(packed != 0){
+				key = guestprocid ? (int)guestprocid : getpid();
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.r", key, fd);
+				postsrvfd(nb, packed >> 16);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.w", key, fd);
+				postsrvfd(nb, packed & 0xffff);
+				snprint(nb, sizeof nb, "/srv/x.m.%d.%d.f", key, fd);
+				pf = create(nb, OWRITE|OTRUNC, 0666);
+				if(pf >= 0){
+					int efd2, ei;
 
-				efd = 0;
-				for(ei = 0; ei < NSOCK; ei++)
-					if(sockmap[ei][1] && sockmap[ei][0] == fd && isefd[ei])
-						efd = 1;
-				fprint(pf, "%d %lux", efd ? 2 : 0, packed);
-				close(pf);
+					efd2 = 0;
+					for(ei = 0; ei < NSOCK; ei++)
+						if(sockmap[ei][1] && sockmap[ei][0] == fd && isefd[ei])
+							efd2 = 1;
+					fprint(pf, "%d %lux", efd2 ? 2 : 0, packed);
+					close(pf);
+				}
 			}
 		}
 		return fd;
@@ -2410,7 +2431,12 @@ dosocketcall(ulong subop, ulong argsp)
 				if(zc3++ < 60)
 					fprint(2, "linuxrun: CSTORE p%d gfd=%lux slot=%d packed=%lux\n",
 						getpid(), a[0], i, r);
-				sockmap[i][2] = r;
+				isefd[i] = 0;
+				/* sockmapfd updates the slot AND republishes
+				 * the x.m markers with the connected pipes:
+				 * the bare store left them at socket()-time
+				 * packed=0 (or absent), starving adopters */
+				sockmapfd(a[0], r);
 			}
 		}
 		break;
@@ -3829,7 +3855,8 @@ dosyscall(Ureg *ur)
 				if(zc4++ < 60)
 					fprint(2, "linuxrun: CSTORE p%d gfd=%lux slot=%d packed=%lux\n",
 						getpid(), a1, i, r);
-				sockmap[i][2] = r;
+				isefd[i] = 0;
+				sockmapfd(a1, r);
 			}
 		}
 		break;
