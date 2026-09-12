@@ -4228,6 +4228,23 @@ dosyscall(Ureg *ur)
 				}
 				if(r > 0 || tleft == 0)
 					break;
+				{
+					/* about to block with nothing ready: dump
+					 * the whole poll set once in a while -
+					 * a wakeup-pipe fd that never reports
+					 * ready is the deadlock signature */
+					static int zps;
+					int pi;
+
+					if(zps++ % 400 == 0 && zps < 1600){
+						fprint(2, "linuxrun: PSET p%d n=%lux:",
+							getpid(), a2);
+						for(pi = 0; pi < (int)a2 && pi < 12; pi++)
+							fprint(2, " %d/%ux/%ux",
+								pf[pi].fd, pf[pi].events, pf[pi].revents);
+						fprint(2, "\n");
+					}
+				}
 				if(tleft > 0 && tleft <= 20){
 					sleep(tleft);
 					tleft = 0;
