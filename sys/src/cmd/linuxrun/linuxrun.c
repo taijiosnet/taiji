@@ -952,6 +952,12 @@ sysopen(ulong path, ulong flags, ulong mode)
 	case 1: pmode = OWRITE; break;
 	case 2: pmode = ORDWR; break;
 	}
+	{
+		static int zo;
+
+		if(zo++ < 500)
+			fprint(2, "linuxrun: OPENCHK p%d %s\n", getpid(), p);
+	}
 	if(flags & LoTrunc)
 		pmode |= OTRUNC;
 	if(flags & LoCreat){
@@ -1797,6 +1803,74 @@ sockwritefd(int fd)
 	return (fd >= 0x10000) ? (fd & 0xffff) : fd;
 }
 
+/* guest file reads come 512 bytes at a time (freetype's buffer) and
+ * each ufs-mediated read costs about a second - a 760KB font took half
+ * an hour.  Serve plain-file reads from a small read-ahead cache. */
+#define NRA 8
+struct {
+	int fd;
+	int len;
+	int off;
+	uchar buf[65536];
+} ratab[NRA];
+
+static long
+fileread(int fd, void *buf, long n)
+{
+	int i;
+
+	for(i = 0; i < NRA; i++)
+		if(ratab[i].fd == fd && ratab[i].off < ratab[i].len)
+			break;
+	if(i < NRA){
+		long b;
+
+		b = n < (long)(ratab[i].len - ratab[i].off) ? n : ratab[i].len - ratab[i].off;
+		memmove(buf, ratab[i].buf + ratab[i].off, b);
+		ratab[i].off += b;
+		if(ratab[i].off >= ratab[i].len)
+			ratab[i].fd = -1;
+		return b;
+	}
+	/* miss: fill the emptiest slot with up to 64KB */
+	for(i = 0; i < NRA; i++)
+		if(ratab[i].fd == -1 || ratab[i].off >= ratab[i].len)
+			break;
+	if(i >= NRA)
+		return read(fd, buf, n);
+	ratab[i].fd = fd;
+	ratab[i].off = 0;
+	ratab[i].len = read(fd, ratab[i].buf, sizeof ratab[i].buf);
+	if(ratab[i].len <= 0){
+		ratab[i].fd = -1;
+		return ratab[i].len;
+	}
+	{
+		long b;
+
+		b = n < (long)ratab[i].len ? n : (long)ratab[i].len;
+		memmove(buf, ratab[i].buf, b);
+		ratab[i].off = b;
+		if(ratab[i].off >= ratab[i].len)
+			ratab[i].fd = -1;
+		return b;
+	}
+}
+
+static int
+fileqlen(int fd)
+{
+	Dir *d;
+	int q;
+
+	q = -1;
+	if((d = dirfstat(fd)) != nil){
+		q = d->length;
+		free(d);
+	}
+	return q;
+}
+
 /* Linux: write/send on a socket that was never connected (or whose
  * connect was refused) fails with ENOTCONN immediately.  Our unconnected
  * slots carry packed==0, whose low half is host fd 0 - writing there
@@ -1894,6 +1968,16 @@ sockread(int gfd, void *buf, ulong n)
 		 * blocking path below and the write-end checks in
 		 * poll/epoll. */
 		return -11;
+	}
+	{
+		static int zrc;
+
+		if(zrc++ < 40 && i >= 0 && sockmap[i][2] != 0)
+			fprint(2, "linuxrun: RDCHK p%d gfd=%d slot=%d packed=%lux qlen=%d eof=%d\n",
+				getpid(), (int)gfd, i, sockmap[i][2], sockrawqlen(i), soeof[i]);
+		else if(zrc < 40 && i < 0)
+			fprint(2, "linuxrun: RDFILE p%d fd=%d n=%lud qlen=%d\n",
+				getpid(), (int)gfd, n, fileqlen(gfd));
 	}
 	i = read(sockreadfd(gfd), buf, n);
 	if(i > 0)
@@ -2177,7 +2261,7 @@ sscanf2(char *s, char *a, int na, char *b, int nb)
 static long
 sysaccept(void)
 {
-	static char buf[65536];
+	static char buf[524288];
 	char target[64];
 	int fd, n, cpid, cseq, rf, wf;
 	char *p;
@@ -2297,7 +2381,7 @@ sysaccept(void)
 static int
 listenqueued(void)
 {
-	static char buf[65536];
+	static char buf[524288];
 	char *p, *q;
 	int fd, n, cpid;
 
@@ -2310,6 +2394,52 @@ listenqueued(void)
 	close(fd);
 	if(n <= 0)
 		return 0;
+	/* garbage-collect stale connect tickets: unaccepted ones (server
+	 * wedged or died) and the markers of dead generations pile up and
+	 * pushed new tickets past the directory-read buffer, so listeners
+	 * stopped seeing fresh connects (Xvfb never accepted xfwm4's
+	 * third connection; its write then blocked on the full pipe) */
+	{
+		static vlong lastgc;
+
+		if(nsec() - lastgc > 30LL*1000*1000*1000){
+			char *g;
+			char gpath[96];
+
+			lastgc = nsec();
+			for(g = memfind(buf, n, "x.c."); g != nil; g = memfind(g+4, n-(int)(g+4-buf), "x.c.")){
+				char *q2;
+				int cp2, sp2;
+				Dir *gd;
+				vlong age;
+
+				cp2 = strtol(g+4, &q2, 10);
+				if(cp2 <= 0 || q2[0] != '.')
+					continue;
+				sp2 = strtol(q2+1, &q2, 10);
+				if(sp2 < 0 || q2[0] != '.')
+					continue;
+				/* still pending (both twins present)? keep it */
+				{
+					char twin[64];
+
+					snprint(twin, sizeof twin, "x.c.%d.%d.b", cp2, sp2);
+					if(memfind(buf, n, twin) != nil)
+						continue;
+				}
+				snprint(gpath, sizeof gpath, "/srv/x.c.%d.%d.a", cp2, sp2);
+				if((gd = dirstat(gpath)) != nil){
+					age = nsec() - gd->mtime*1000000LL;
+					free(gd);
+					if(age > 300LL*1000*1000*1000){
+						remove(gpath);
+						snprint(gpath, sizeof gpath, "/srv/x.c.%d.%d.b", cp2, sp2);
+						remove(gpath);
+					}
+				}
+			}
+		}
+	}
 	for(p = memfind(buf, n, "x.c."); p != nil; p = memfind(p+4, n-(int)(p+4-buf), "x.c.")){
 		char tgt[64];
 		int s2, tf, tn, ok;
@@ -2850,6 +2980,17 @@ dosyscall(Ureg *ur)
 	a6 = ur->bp;
 	r = -Enosys;
 	{
+		static int rainit;
+
+		if(!rainit){
+			int ri;
+
+			rainit = 1;
+			for(ri = 0; ri < NRA; ri++)
+				ratab[ri].fd = -1;
+		}
+	}
+	{
 		static int flowc;
 		int si, sk, a, b;
 
@@ -2942,9 +3083,15 @@ dosyscall(Ureg *ur)
 		exits(exitstr);
 		return 0;
 	case 3:		/* read */
-		r = sockread((int)a1, (void*)a2, a3);
-		if(r < 0 && r != -11)	/* keep EAGAIN */
-			r = -Ebadf;
+		if(sockslot((int)a1) < 0){
+			r = fileread((int)a1, (void*)a2, a3);
+			if(r < 0)
+				r = -Ebadf;
+		}else{
+			r = sockread((int)a1, (void*)a2, a3);
+			if(r < 0 && r != -11)	/* keep EAGAIN */
+				r = -Ebadf;
+		}
 		break;
 	/* NB: writes through bridge sockets can block the whole
 	 * emulator when the pipe is full; with the X server mid-reply
@@ -3054,7 +3201,15 @@ dosyscall(Ureg *ur)
 			}
 		}
 		break;
-	case 6:		/* close: do NOT remove the /srv x.m markers -
+	case 6:		/* close */
+		{
+			int ci;
+
+			for(ci = 0; ci < NRA; ci++)
+				if(ratab[ci].fd == (int)a1)
+					ratab[ci].fd = -1;
+		}
+		/* do NOT remove the /srv x.m markers -
 		 * they are keyed by the THREAD-GROUP id, so a sibling
 		 * thread closing its copy of the fd (or a transient
 		 * socket reusing the number) yanked the entries out
@@ -3095,6 +3250,13 @@ dosyscall(Ureg *ur)
 			*(ulong*)a1 = r;
 		break;
 	case 19:	/* lseek */
+		{
+			int qi;
+
+			for(qi = 0; qi < NRA; qi++)
+				if(ratab[qi].fd == (int)a1)
+					ratab[qi].fd = -1;
+		}
 		r = seek((int)a1, a2, a3);
 		break;
 	case 158:	/* sched_yield: glvnd's glX entry drain-wait yields in a
@@ -3370,7 +3532,22 @@ dosyscall(Ureg *ur)
 		{
 			vlong t;
 
-			t = nsec();
+			/* guest clocks run faster than real time: glib/dbus
+			 * timeouts (25-30s) expire before glacial emulated
+			 * roundtrips complete - xfconfd died 'Timeout was
+			 * reached' starting up.  All guests scale equally,
+			 * so the universe stays consistent; timers just
+			 * fire sooner in real time.  Scaled around a
+			 * boot-time base: a bare multiply overflows the
+			 * epoch-nanosecond magnitude and glib aborts on
+			 * the negative 'non-monotonic' clock. */
+			{
+				static vlong clkbase = -1;
+
+				if(clkbase < 0)
+					clkbase = nsec();
+				t = clkbase + (nsec()-clkbase)*8;
+			}
 			if(a2 != 0){
 				*(ulong*)a2 = t/1000000000;
 				*(ulong*)(a2+4) = t%1000000000;
@@ -4450,7 +4627,13 @@ dosyscall(Ureg *ur)
 				vlong t;
 				static int zck;
 
-				t = nsec();
+				{
+					static vlong clkbase = -1;
+
+					if(clkbase < 0)
+						clkbase = nsec();
+					t = clkbase + (nsec()-clkbase)*8;
+				}	/* guest clock mult - see 265 */
 				((vlong*)a2)[0] = t/1000000000;
 				((vlong*)a2)[1] = t%1000000000;
 				if(zck++ % 2000 == 0)

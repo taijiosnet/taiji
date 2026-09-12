@@ -10,6 +10,9 @@ rm -f /debian/rootfs/tmp/*.t.*
 debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
 sleep 20
 echo dbus-phase
+debian-session -c 'linuxrun /usr/lib/i386-linux-gnu/xfce4/xfconf/xfconfd' &
+sleep 90
+echo xfconfd-phase
 mkdir -p /debian/rootfs/tmp/.X11-unix
 rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
 debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24 -extension GLX' &
