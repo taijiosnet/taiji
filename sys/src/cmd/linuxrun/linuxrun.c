@@ -3602,7 +3602,7 @@ dosyscall(Ureg *ur)
 
 				if(clkbase < 0)
 					clkbase = nsec();
-				t = clkbase + (nsec()-clkbase)*8;
+				t = clkbase + (nsec()-clkbase)*1;
 			}
 			if(a2 != 0){
 				*(ulong*)a2 = t/1000000000;
@@ -4705,7 +4705,7 @@ dosyscall(Ureg *ur)
 
 					if(clkbase < 0)
 						clkbase = nsec();
-					t = clkbase + (nsec()-clkbase)*8;
+					t = clkbase + (nsec()-clkbase)*1;
 				}	/* guest clock mult - see 265 */
 				((vlong*)a2)[0] = t/1000000000;
 				((vlong*)a2)[1] = t%1000000000;
