@@ -2344,8 +2344,20 @@ sysaccept(void)
 		rf = open(target, OREAD);
 		snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
 		wf = open(target, OWRITE);
-		if(rf < 0 || wf < 0)
+		if(rf < 0 || wf < 0){
+			static int zaf;
+
+			/* broken ticket: consume it, else the listener stays
+			 * ready forever and the accept loop spins */
+			if(zaf++ < 20)
+				fprint(2, "linuxrun: TKCONSUME p%d client=%d seq=%d rf=%d wf=%d\n",
+					getpid(), cpid, cseq, rf, wf);
+			snprint(target, sizeof target, "/srv/x.c.%d.%d.a", cpid, cseq);
+			remove(target);
+			snprint(target, sizeof target, "/srv/x.c.%d.%d.b", cpid, cseq);
+			remove(target);
 			continue;
+		}
 		/* consume the ticket: entries are removed once served, so
 		 * the same client can queue its next connection and stale
 		 * posts never keep the listener falsely ready */
@@ -2456,13 +2468,39 @@ listenqueued(void)
 		if(memfind(buf, n, tgt) == nil)
 			continue;
 		/* only tickets aimed at this listener: the client's
-		 * <path>.t.<pid>.<seq> marker beside our boundpath */
+		 * <path>.t.<pid>.<seq> marker beside our boundpath.
+		 * A ticket from a DEAD client (crashed mid-connect) keeps
+		 * the listener permanently ready and the server spins in
+		 * failing accepts, never dispatching anything - dbus-daemon
+		 * wedged exactly so, starving every main-loop client.  Reap
+		 * the ticket and its marker instead of reporting it. */
 		{
 			char mpath[384];
+			char ppath[64];
 
+			snprint(ppath, sizeof ppath, "/proc/%d", cpid);
+			if(access(ppath, AEXIST) < 0){
+				char t2[64];
+
+				snprint(t2, sizeof t2, "/srv/x.c.%d.%d.a", cpid, s2);
+				remove(t2);
+				snprint(t2, sizeof t2, "/srv/x.c.%d.%d.b", cpid, s2);
+				remove(t2);
+				snprint(mpath, sizeof mpath, "%s.t.%d.%d", boundpath, cpid, s2);
+				remove(mpath);
+				fprint(2, "linuxrun: TKREAP p%d dead client %d seq %d\n",
+					getpid(), cpid, s2);
+				continue;
+			}
 			snprint(mpath, sizeof mpath, "%s.t.%d.%d", boundpath, cpid, s2);
-			if(access(mpath, AEXIST) >= 0)
+			if(access(mpath, AEXIST) >= 0){
+				static int zlq;
+
+				if(zlq++ < 60)
+					fprint(2, "linuxrun: LQREADY p%d client=%d seq=%d\n",
+						getpid(), cpid, s2);
 				return 1;
+			}
 		}
 	}
 	return 0;
@@ -2610,7 +2648,13 @@ dosocketcall(ulong subop, ulong argsp)
 		break;
 	case 5:		/* accept */
 		r = sysaccept();
-		if(r >= 0x10000){
+		if(r >= 0){
+			/* ALWAYS register: the packed pair is (rf<<16)|wf
+			 * and rf can be 0 when the acceptor's stdin was
+			 * closed - the old >= 0x10000 guard then skipped
+			 * registration and the connection stayed forever
+			 * unreadable (dbus-daemon never read xfwm4's
+			 * connection: THE wedge) */
 			int ns;
 
 			ns = socknewslot(r, 0);
@@ -2729,8 +2773,15 @@ dofutex(ulong addr, ulong op, ulong val, ulong utime, ulong a5, ulong a6)
 	int sub;
 	{
 		static int zo;
+		static int zw;
 
-		if(zo++ < 60)
+		/* WAIT-side lifecycle only: the wakes are noise; whether a
+		 * WAIT ever returns is the worker-thread question */
+		if((op & 127) == 0 || (op & 127) == 9){
+			if(zw++ < 200)
+				fprint(2, "linuxrun: FTXW p%d op=%lux addr=%lux val=%lux to=%lux\n",
+					getpid(), op, addr, val, utime);
+		}else if(zo++ < 30)
 			fprint(2, "linuxrun: FTX p%d op=%lux addr=%lux val=%lux\n",
 				getpid(), op, addr, val);
 	}
@@ -3206,10 +3257,13 @@ dosyscall(Ureg *ur)
 	case 6:		/* close */
 		{
 			int ci;
+			static int zcl;
 
 			for(ci = 0; ci < NRA; ci++)
 				if(ratab[ci].fd == (int)a1)
 					ratab[ci].fd = -1;
+			if(zcl++ < 150 && (int)a1 >= 8)
+				fprint(2, "linuxrun: CLOSE p%d fd=%lux\n", getpid(), a1);
 		}
 		/* do NOT remove the /srv x.m markers -
 		 * they are keyed by the THREAD-GROUP id, so a sibling
@@ -4075,7 +4129,7 @@ dosyscall(Ureg *ur)
 		break;
 	case 364:	/* accept4 (direct): glibc's accept() on i386 */
 		r = sysaccept();
-		if(r >= 0x10000){
+		if(r >= 0){
 			int ns;
 
 			ns = socknewslot(r, 0);
