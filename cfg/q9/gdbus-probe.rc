@@ -1,0 +1,13 @@
+#!/bin/rc
+# Minimal glib-main-loop dbus reproducer: daemon + gdbus call.
+# dbus-send (libdbus, no main loop) round-trips fine; gdbus uses the
+# same GDBus worker machinery as xfwm4 - if it wedges, this is the
+# reproducer for the dispatch bug.
+rm -f /debian/rootfs/tmp/dbus-1 /debian/rootfs/tmp/dbus-1.req
+rm -f /debian/rootfs/tmp/*.t.*
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --config-file /usr/share/dbus-1/dbus-run.conf --nofork --nopidfile' &
+sleep 20
+echo dbus-up
+debian-session -c 'linuxrun /bin/sh /tmp/gdbuscall.sh' &
+sleep 420
+echo gdbus-probe-done
