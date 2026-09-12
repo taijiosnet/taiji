@@ -1972,9 +1972,11 @@ sockread(int gfd, void *buf, ulong n)
 	{
 		static int zrc;
 
-		if(zrc++ < 40 && i >= 0 && sockmap[i][2] != 0)
-			fprint(2, "linuxrun: RDCHK p%d gfd=%d slot=%d packed=%lux qlen=%d eof=%d\n",
-				getpid(), (int)gfd, i, sockmap[i][2], sockrawqlen(i), soeof[i]);
+		/* only the reads that will actually block matter: an empty
+		 * socket read with no EOF is the mutual-wait signature */
+		if(zrc++ < 100 && i >= 0 && sockmap[i][2] != 0 && sockrawqlen(i) == 0 && !soeof[i])
+			fprint(2, "linuxrun: RDBLK p%d gfd=%d slot=%d packed=%lux eof=%d\n",
+				getpid(), (int)gfd, i, sockmap[i][2], soeof[i]);
 		else if(zrc < 40 && i < 0)
 			fprint(2, "linuxrun: RDFILE p%d fd=%d n=%lud qlen=%d\n",
 				getpid(), (int)gfd, n, fileqlen(gfd));
