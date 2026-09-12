@@ -4962,21 +4962,16 @@ traphandler(void *v, char *msg)
 		return 0;
 	ur = v;
 	if(msg != nil && strcmp(msg, "alarm") == 0){
-		/* the dispatcher re-arms a 60s alarm on every syscall: a
-		 * guest stuck in pure userspace (no syscalls at all) is
-		 * finally visible here - the interrupted context names
-		 * the spin */
+		/* the dispatcher re-arms a 2s alarm on every syscall: each
+		 * note samples the guest wherever it is - userspace loops
+		 * (glib's check/dispatch between the wakeup read and the
+		 * re-poll) included, which no syscall-level probe sees */
 		static int za;
 
-		if(za++ < 10){
-			int i;
-
-			fprint(2, "linuxrun: ALARMSPIN p%d pc=%lux sp=%lux bp=%lux ax=%lux bx=%lux cx=%lux\n",
-				getpid(), ur->pc, ur->sp, ur->bp, ur->ax, ur->bx, ur->cx);
-			for(i = 0; i < 16; i++)
-				fprint(2, "linuxrun:  sp+%d = %lux\n", i*4,
-					*(ulong*)(ur->sp + i*4));
-		}
+		if(za++ < 300)
+			fprint(2, "linuxrun: SAMPLE p%d pc=%lux sp=%lux bp=%lux ax=%lux bx=%lux\n",
+				getpid(), ur->pc, ur->sp, ur->bp, ur->ax, ur->bx);
+		alarm(2000);
 		return 1;
 	}
 	if(msg != nil && strstr(msg, "write on closed pipe") != nil){
@@ -5028,7 +5023,7 @@ traphandler(void *v, char *msg)
 		}
 		ur->ax = dosyscall(ur);
 		ur->pc += 2;
-		alarm(60000);
+		alarm(2000);
 		return 1;
 	}
 	if(ur->trap != TrapUD){
@@ -5268,7 +5263,7 @@ traphandler(void *v, char *msg)
 	ur->pc += 2;
 	if(tlsfsokay)
 		ur->fs = tlsselector;
-	alarm(60000);
+	alarm(2000);
 	return 1;
 }
 

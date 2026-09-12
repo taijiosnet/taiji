@@ -1,11 +1,14 @@
 #!/bin/rc
-# Watchdog: periodically dump ps and each process's current syscall.
+# Watchdog: periodically dump ps, and poke every linuxrun process with
+# a 'sample' note - the emulator prints the guest's current PC (the
+# sampling profiler).  Three pokes per cycle for a small distribution.
 for(i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40){
 	sleep 240
 	echo WD $i
 	ps
-	for(f in /proc/[0-9]*/syscall){
-		echo P $f
-		cat $f
+	for(f in /proc/[0-9]*/note){
+		echo -n sample > $f >[2]/dev/null
+		echo -n sample > $f >[2]/dev/null
+		echo -n sample > $f >[2]/dev/null
 	}
 }
