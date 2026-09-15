@@ -105,3 +105,55 @@ read(int fd, void *buf, usize n)
 	tr3("TRrd=", r, 0, 0);
 	return r;
 }
+
+long sendmsg(int fd, void *msg, int flags);
+long
+sendmsg(int fd, void *msg, int flags)
+{
+	/* msg: msghdr with iov at +8, iovlen at +12 */
+	struct iov *v = *(struct iov **)((char *)msg + 8);
+	int cnt = *(int *)((char *)msg + 12);
+
+	tr3("TRsendmsg", fd, cnt, cnt > 0 ? (long)v[0].len : 0);
+	{
+		long total = 0;
+		int i;
+
+		for (i = 0; i < cnt; i++) {
+			long r = raw3(4, fd, (long)v[i].base, (long)v[i].len);
+			if (r < 0)
+				return r;
+			total += r;
+		}
+		tr3("TRsmsg=", total, 0, 0);
+		return total;
+	}
+}
+
+long recvmsg(int fd, void *msg, int flags);
+long
+recvmsg(int fd, void *msg, int flags)
+{
+	struct iov *v = *(struct iov **)((char *)msg + 8);
+	int cnt = *(int *)((char *)msg + 12);
+	long r;
+
+	tr3("TRrecvmsg", fd, cnt, flags);
+	if (cnt < 1)
+		return raw3(102 * 256 + 17, 0, 0, 0);
+	r = raw3(3, fd, (long)v[0].base, (long)v[0].len);
+	tr3("TRrmsg=", r, 0, 0);
+	return r;
+}
+
+long send(int fd, const void *buf, usize n, int flags);
+long
+send(int fd, const void *buf, usize n, int flags)
+{
+	long r;
+
+	tr3("TRsend", fd, (long)n, flags);
+	r = raw3(4, fd, (long)buf, (long)n);
+	tr3("TRsend=", r, 0, 0);
+	return r;
+}

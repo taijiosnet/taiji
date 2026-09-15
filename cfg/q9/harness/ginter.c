@@ -130,3 +130,49 @@ g_main_context_is_owner(void *context)
 	tr3("TRowner", (long)context, r, 0);
 	return r;
 }
+
+void *g_task_attach_source(void *task, void *source, void *func);
+void *
+g_task_attach_source(void *task, void *source, void *func)
+{
+	tr3("TRtasksrc", (long)task, (long)source, 0);
+	return task; /* unreachable: g_task_attach_source is private */
+}
+
+void g_main_context_push_thread_default(void *context);
+void
+g_main_context_push_thread_default(void *context)
+{
+	static void (*real)(void *);
+
+	if (!real)
+		real = (void (*)(void *))dlsym(RTLD_NEXT, "g_main_context_push_thread_default");
+	tr3("TRpush", (long)context, 0, 0);
+	if (real)
+		real(context);
+}
+
+void g_main_context_pop_thread_default(void *context);
+void
+g_main_context_pop_thread_default(void *context)
+{
+	static void (*real)(void *);
+
+	if (!real)
+		real = (void (*)(void *))dlsym(RTLD_NEXT, "g_main_context_pop_thread_default");
+	tr3("TRpop", (long)context, 0, 0);
+	if (real)
+		real(context);
+}
+
+void *g_main_loop_new(void *context, int is_running);
+void *
+g_main_loop_new(void *context, int is_running)
+{
+	static void *(*real)(void *, int);
+
+	if (!real)
+		real = (void *(*)(void *, int))dlsym(RTLD_NEXT, "g_main_loop_new");
+	tr3("TRloopnew", (long)context, (long)is_running, 0);
+	return real ? real(context, is_running) : 0;
+}
