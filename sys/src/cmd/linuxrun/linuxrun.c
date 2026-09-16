@@ -4292,6 +4292,42 @@ dosyscall(Ureg *ur)
 				sleep(20);
 				if(tleft > 0)
 					tleft -= 20;
+				if(tleft < 0){
+					/* infinite poll INCLUDING an eventfd
+					 * stand-in: return a spurious 0
+					 * after ~500ms.  glib's owner-check
+					 * confusion (a thread that wrongly
+					 * matches context->owner) means the
+					 * wakeup eventfd never gets written;
+					 * the parked main loop then never
+					 * re-runs prepare and never sees the
+					 * attached idle source.  A spurious
+					 * return makes it iterate - prepare()
+					 * dispatches the idle and the
+					 * deadlock breaks.  Restricted to
+					 * eventfd polls: a blanket cap broke
+					 * the plain-socket SASL exchange. */
+					static vlong lastspur;
+					vlong now2;
+					int efdq, qi;
+
+					efdq = 0;
+					for(qi = 0; qi < (long)a2; qi++){
+						int qs2;
+
+						qs2 = sockslot(pf[qi].fd);
+						if(qs2 >= 0 && isefd[qs2]){
+							efdq = 1;
+							break;
+						}
+					}
+					now2 = nsec();
+					if(efdq && now2 - lastspur > 500LL*1000*1000){
+						lastspur = now2;
+						r = 0;
+						break;
+					}
+				}
 			}
 			{
 				/* spin forensics: what GTK-style callers are
