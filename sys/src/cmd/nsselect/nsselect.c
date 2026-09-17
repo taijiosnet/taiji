@@ -100,16 +100,14 @@ splitfields(char *line, char *fields[], int nf)
 	p = line;
 	for(i = 0; i < nf; i++){
 		e = strchr(p, '|');
-		if(e == nil){
-			fields[i] = p;
-			return i+1;
-		}
-		n = e - p;
+		n = e != nil ? e - p : strlen(p);
 		fields[i] = malloc(n+1);
 		if(fields[i] == nil)
 			return i;
 		memmove(fields[i], p, n);
 		fields[i][n] = 0;
+		if(e == nil)
+			return i+1;
 		p = e+1;
 	}
 	return nf;
