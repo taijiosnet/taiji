@@ -227,6 +227,20 @@ breakout:;
 	_exits(0);
 }
 
+
+void
+eshutdown(void)
+{
+	if(mousefd >= 0){
+		close(mousefd);
+		mousefd = -1;
+	}
+	if(cursorfd >= 0){
+		close(cursorfd);
+		cursorfd = -1;
+	}
+}
+
 void
 einit(ulong keys)
 {

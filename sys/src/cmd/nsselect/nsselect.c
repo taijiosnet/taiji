@@ -2,6 +2,8 @@
 #include <libc.h>
 #include "kryon.h"
 
+extern void eshutdown(void);
+
 /* Namespace selector for the TaijiOS boot.  Two stages: pick a
  * namespace from /lib/namespaces, then a window manager from the
  * /lib/wms entries that declare support for it, and launch the
@@ -408,6 +410,10 @@ startsession(Wm *wm)
 		sysfatal("launch %s failed: %r", wm->command);
 	close(launchfd);
 	launchfd = -1;
+	/* release the mouse before the launched session starts: the
+	 * launcher's waitmousefree() gives it 5s, then execs the WM
+	 * anyway - einit would fail with 'already in use' */
+	eshutdown();
 	waitsession();
 	exits(nil);
 }
