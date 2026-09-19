@@ -38,23 +38,29 @@ the result. Measured progress so far:
 | Stage | Result |
 | --- | --- |
 | Wine ELF loads through `linuxrun` | works |
-| `ld.so` dependency search (`openat`, `statx` probes) | works after this round's fixes |
+| `ld.so` dependency search (`openat`, `statx` probes) | works |
 | `libc.so.6` and `libwine` load | works |
-| Wine's own `ntdll.so` load | **fails**: `wine: could not load ntdll.so: (null)` |
+| Wine locates itself (`realpath` of `/proc/self/exe`) and loads `ntdll.so` | works |
+| `wine --version` | **works**: prints `wine-8.0 (Debian 8.0~repack-4)` |
+| `wine notepad` startup | **process stays alive** through the probe window; reaching a mapped window still needs the display path and wineserver verification |
 
-Syscall work landed from the first measurement: `statx` (i386 nr 383) is
-now implemented — absolute paths, `AT_FDCWD`, dirfd-relative through
-`/proc/pid/fd`, and `AT_EMPTY_PATH` (flags are the third argument, which
-the first cut got wrong; the correction is what let ld.so finish).
+Syscall and runtime work landed from these measurements:
 
-The remaining blocker is the deepest one: Wine's loader dlopens
-`i386-unix/ntdll.so`, which needs glibc's dynamic-loader TLS machinery
-(TLS descriptors, `dl_iterate_phdr`, early TLS setup) that the translated
-runtime does not yet provide. That is the next implementation target on
-the Wine path; it is loader work in `linuxrun`, not a packaging problem.
+- `statx` (i386 nr 383): absolute paths, `AT_FDCWD`, dirfd-relative through
+  `/proc/pid/fd`, and `AT_EMPTY_PATH` (flags are the third argument).
+- `readlink`/`readlinkat` now answer `/proc/self/exe` and `/proc/<pid>/exe`
+  with the guest-visible executable path, but only when it is absolute —
+  relative native invocations keep the old answer so multi-call binaries
+  like busybox still fall back to `argv[0]`.
+- `/proc/self` is rewritten to the numeric `/proc/<pid>` directory for the
+  stat and access families, since the native `/proc` has no `self` entry
+  and `realpath` probes every component.
+- `faccessat` (307) and `faccessat2` (439) are implemented.
 
-Audio remains unimplemented everywhere, so the first target must tolerate
-its absence (notepad does).
+The next targets on the Wine path, in order: give the probe a live Xvfb
+display so notepad can map a window, verify wineserver's socket protocol
+under the translated syscalls, and then wire a Windows launcher through
+`linux-app` following the Text Editor pattern.
 
 ## Architecture decision to make next
 

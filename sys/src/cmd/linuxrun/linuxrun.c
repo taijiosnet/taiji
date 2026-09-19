@@ -2906,6 +2906,69 @@ countargs(char **a)
 
 /* execve in place: drop the guest image, load the new one; the trap
  * handler installs the registers. */
+
+/* The guest-visible path of the running image, served by readlink on
+ * /proc/self/exe; Wine derives its library directory from it. */
+static char execpath[1024];
+
+static void
+rememberexec(char *path)
+{
+	if(path == nil || path[0] == 0)
+		return;
+	strncpy(execpath, path, sizeof execpath-1);
+	execpath[sizeof execpath-1] = 0;
+}
+
+/* Rewrite /proc/self to the numeric directory: the native /proc has no
+ * self entry, and realpath(/proc/self/exe) probes every component. */
+static char*
+fixproc(char *buf, int n, char *path)
+{
+	if(path == nil)
+		return nil;
+	if(strncmp(path, "/proc/self", 10) == 0 &&
+	   (path[10] == 0 || path[10] == '/')){
+		snprint(buf, n, "/proc/%d%s", getpid(), path+10);
+		return buf;
+	}
+	return path;
+}
+
+/* readlink for the paths programs actually use; ordinary namespace files
+ * keep the realpath-compatible EINVAL answer. */
+static long
+sysreadlink(char *path, char *buf, ulong bufsz)
+{
+	char fb[1024];
+	char *t, *rest;
+	int n;
+
+	if(path == nil || buf == nil)
+		return -Efault;
+	t = nil;
+	if(strcmp(path, "/proc/self/exe") == 0)
+		t = execpath;
+	else if(strncmp(path, "/proc/", 6) == 0){
+		rest = path+6;
+		while(*rest >= '0' && *rest <= '9')
+			rest++;
+		if(strcmp(rest, "/exe") == 0)
+			t = execpath;
+	}
+	/* Only an absolute path is valid in the guest view; relative native
+	 * invocations keep the old answer so multi-call binaries like
+	 * busybox fall back to argv[0] as before. */
+	if(t != nil && t[0] == '/'){
+		n = strlen(t);
+		if(n > bufsz)
+			n = bufsz;
+		memmove(buf, t, n);
+		return n;
+	}
+	return access(fixproc(fb, sizeof fb, path), AEXIST) < 0 ? -Enoent : -Einval;
+}
+
 static long
 sysexecve(char *path, char **gargv)
 {
@@ -2948,6 +3011,7 @@ sysexecve(char *path, char **gargv)
 		close(fd);
 		return -Enoexec;
 	}
+	rememberexec(path);
 	for(i = 0; i < nguestsegs; i++)
 		segdetach((void*)guestsegs[i][0]);
 	nguestsegs = 0;
@@ -3264,9 +3328,10 @@ dosyscall(Ureg *ur)
 		else if(a1 != 0xffffff9cUL)
 			r = -Ebadf;
 		else{
+			char fb[1024];
 			int sfd;
 
-			sfd = open((char*)a2, OREAD);
+			sfd = open(fixproc(fb, sizeof fb, (char*)a2), OREAD);
 			if(sfd < 0)
 				r = -Enoent;
 			else{
@@ -4492,10 +4557,7 @@ dosyscall(Ureg *ur)
 			r = 0;
 		break;
 	case 85:	/* readlink */
-		/* Namespace files are not symbolic links.  realpath probes each
-		 * component with readlink and needs EINVAL for an existing path,
-		 * not ENOENT (which makes valid document paths disappear). */
-		r = access((char*)a1, AEXIST) < 0 ? -Enoent : -Einval;
+		r = sysreadlink((char*)a1, (char*)a2, a3);
 		break;
 	case 305:	/* readlinkat: absolute paths or AT_FDCWD */
 		if(a2 == 0)
@@ -4503,14 +4565,38 @@ dosyscall(Ureg *ur)
 		else if(((char*)a2)[0] != '/' && a1 != 0xffffff9cUL)
 			r = -Ebadf;
 		else
-			r = access((char*)a2, AEXIST) < 0 ? -Enoent : -Einval;
+			r = sysreadlink((char*)a2, (char*)a3, a4);
+		break;
+	case 307:	/* faccessat */
+	case 439:	/* faccessat2 */
+		{
+			char fb[1024];
+			int amode;
+
+			if(a2 == 0)
+				r = -Efault;
+			else if(((char*)a2)[0] != '/' && a1 != 0xffffff9cUL)
+				r = -Ebadf;
+			else{
+				amode = AEXIST;
+				if(a3 & 4)
+					amode = AREAD;
+				else if(a3 & 2)
+					amode = AWRITE;
+				else if(a3 & 1)
+					amode = AEXEC;
+				r = access(fixproc(fb, sizeof fb, (char*)a2), amode) < 0 ?
+					-Enoent : 0;
+			}
+		}
 		break;
 	case 195:	/* stat64 */
 	case 196:	/* lstat64 */
 		{
+			char fb[1024];
 			int sfd;
 
-			sfd = open((char*)a1, OREAD);
+			sfd = open(fixproc(fb, sizeof fb, (char*)a1), OREAD);
 			if(sfd < 0)
 				r = -Enoent;
 			else{
@@ -4521,7 +4607,7 @@ dosyscall(Ureg *ur)
 		break;
 	case 383:	/* statx: absolute, AT_FDCWD, dirfd-relative, or AT_EMPTY_PATH */
 		{
-			char full[1024];
+			char full[1024], fb[1024];
 			int sfd;
 
 			full[0] = 0;
@@ -4531,7 +4617,7 @@ dosyscall(Ureg *ur)
 			else if(((char*)a2)[0] == 0 && (a3 & 0x1000) && a1 < 1024)
 				r = fillstatx(a5, (int)a1);
 			else if(((char*)a2)[0] == '/' || a1 == 0xffffff9cUL){
-				strncpy(full, (char*)a2, sizeof full-1);
+				strncpy(full, fixproc(fb, sizeof fb, (char*)a2), sizeof full-1);
 				full[sizeof full-1] = 0;
 			}
 			else if(a1 < 1024)
@@ -5468,6 +5554,8 @@ main(int argc, char *argv[])
 		fatal("%s: not an executable (type %d)", argv[0], eh.type);
 	if(eh.phnum > Maxph)
 		fatal("%s: too many program headers", argv[0]);
+
+	rememberexec(argv[0]);
 
 	if(analyzeonly){
 		print("linuxrun: %s: static 386 Linux ELF entry %#lux\n",
