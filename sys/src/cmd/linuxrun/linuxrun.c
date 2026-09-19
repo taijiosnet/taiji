@@ -469,6 +469,27 @@ loadelf(int fd, Ehdr *eh, ulong base)
 	if(readat(fd, buf, eh->phnum*eh->phentsize, eh->phoff) < 0)
 		fatal("read program headers: %r");
 	nph = 0;
+	{
+		/* name the image and its LOAD layout: an exec whose
+		 * segments land in unmapped guest memory (0xdfff seen)
+		 * must be identifiable before it kills the process */
+		static int zl;
+
+		if(zl++ < 12){
+			fprint(2, "linuxrun: LOADELF p%d entry=%lux phnum=%d base=%lux\n",
+				getpid(), eh->entry, eh->phnum, base);
+			for(i = 0; i < eh->phnum; i++){
+				int t, fv, mz;
+
+				t = le32(buf+i*eh->phentsize+0);
+				fv = le32(buf+i*eh->phentsize+8);
+				mz = le32(buf+i*eh->phentsize+20);
+				if(t == 1 || fv+base > 0xd0000000)
+					fprint(2, "linuxrun:  ph%d type=%d va=%lux+%lux\n",
+						i, t, fv+base, mz);
+			}
+		}
+	}
 	for(i = 0; i < eh->phnum; i++){
 		ph[nph].type = le32(buf+i*eh->phentsize+0);
 		ph[nph].offset = le32(buf+i*eh->phentsize+4);
