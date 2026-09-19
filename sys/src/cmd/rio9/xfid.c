@@ -238,7 +238,9 @@ xfidopen(Xfid *x)
 		w->ctlopen = TRUE;
 		break;
 	case Qkbdin:
-		if(w !=  wkeyboard){
+		/* The simulated keyboard window and the desktop surface may
+		 * synthesize input; ordinary applications may not. */
+		if(w != wkeyboard && !w->desktop){
 			filsysrespond(x->fs, x, &t, Eperm);
 			return;
 		}

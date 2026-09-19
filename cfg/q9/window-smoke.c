@@ -132,6 +132,15 @@ main(void)
 	check(platform->focus_task(ids[1]), "switch windows");
 	check(state(ids[1], " current visible window"), "second window focused");
 	check(state(ids[0], " notcurrent visible window"), "first window unfocused");
+	/* Ctrl+Tab cycles application windows through the same activation
+	 * path as taskbar clicks; the chord is injected as synthesized
+	 * keyboard input (Kctab = KF|0x19 in UTF-8). */
+	fd = open("/dev/kbdin", OWRITE);
+	check(fd >= 0, "open keyboard input");
+	check(write(fd, "\xEF\x80\x99", 3) == 3, "inject Ctrl+Tab");
+	close(fd);
+	check(state(ids[0], " current visible window"), "Ctrl+Tab focuses next window");
+	check(state(ids[1], " notcurrent visible window"), "Ctrl+Tab unfocuses previous");
 	check(!platform->focus_task(999999), "reject missing window");
 	for(i=0; i<2; i++)
 		control(ids[i], "delete");

@@ -1,0 +1,13 @@
+#!/bin/rc
+# Rebuild the window server and X bridge after source changes.
+cd /sys/src/cmd/rio9
+if(! mk install){
+	echo taiji-build-rio9-failed
+	exit failed
+}
+cd /sys/src/cmd/xbridge
+if(! mk install){
+	echo taiji-build-xbridge-failed
+	exit failed
+}
+echo taiji-build-desktop-ok

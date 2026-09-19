@@ -52,4 +52,13 @@ echo taiji-unified-display-ok
 if(test -e /proc/$app/ctl)
 	echo kill >/proc/$app/ctl
 echo kill >/proc/$server/ctl
+# Closing applications must not leak processes; give the kills a moment.
+sleep 3
+if(grep -s linuxrun /proc/[0-9]*/status)
+	fail linuxrun-left-behind
+if(grep -s xbridge /proc/[0-9]*/status)
+	fail xbridge-left-behind
+if(grep -s Xvfb /proc/[0-9]*/status)
+	fail Xvfb-left-behind
+echo taiji-unified-cleanup-ok
 echo taiji-unified-smoke-ok
