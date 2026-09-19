@@ -1045,6 +1045,94 @@ sysopen(ulong path, ulong flags, ulong mode)
 
 static ulong mapbump = Mapbase + Brksize + Pgsz;
 
+/* PROT_NONE reservations: recorded but not backed until mprotect makes
+ * them accessible.  Wine's virtual_init reserves its whole views area
+ * (about 2GB at 0x110000) this way before allocating anything real. */
+static struct { ulong base, len; } resv[128];
+static int nresv;
+
+static void
+resvadd(ulong base, ulong len)
+{
+	if(nresv < nelem(resv)){
+		if(nresv > 0 &&
+		   resv[nresv-1].base + resv[nresv-1].len == base){
+			resv[nresv-1].len += len;
+			return;
+		}
+		resv[nresv].base = base;
+		resv[nresv].len = len;
+		nresv++;
+	}
+}
+
+static void
+resvdrop(ulong addr, ulong len)
+{
+	int i;
+
+	for(i = 0; i < nresv; i++){
+		if(addr <= resv[i].base && resv[i].base + resv[i].len <= addr+len){
+			memmove(&resv[i], &resv[i+1], (nresv-i-1)*sizeof resv[0]);
+			nresv--;
+			i--;
+		}
+	}
+}
+
+static void	zerorange(ulong, ulong);
+
+/* Low guest memory, attached on demand: Wine's virtual_init builds its
+ * views from small fixed mappings at low addresses that the main guest
+ * segment does not cover.  Sized to what the VM can spare next to the
+ * main segment. */
+enum { Lowbase = 0x200000, Lowsize = 0x1fe00000 };
+static int lowseg;
+
+static void
+ensurelow(void)
+{
+	if(!lowseg){
+		if(segat(Lowbase, Lowsize) != (void*)-1)
+			lowseg = 1;
+		else if(verbose)
+			fprint(2, "linuxrun: low segment attach failed: %r\n");
+	}
+}
+
+/* back a reserved range on demand: only ranges that were actually
+ * recorded as reservations are touched (zeroed or segmented); ordinary
+ * mprotects over already-loaded memory must not be zeroed. */
+static long
+resvmaterialize(ulong addr, ulong len)
+{
+	int i, hit;
+
+	hit = 0;
+	for(i = 0; i < nresv; i++){
+		if(addr <= resv[i].base && resv[i].base + resv[i].len <= addr+len){
+			hit = 1;
+			break;
+		}
+	}
+	if(!hit)
+		return 0;
+	resvdrop(addr, len);
+	if(addr >= Mapbase && addr+len <= Mapbase+Mapsize){
+		zerorange(addr, len);
+		return 0;
+	}
+	if((addr >= 0x68000000 && addr < 0x69000000) ||
+	   (addr >= 0x7d000000 && addr < 0x7e000000))
+		return 0;
+	if(segat(addr, len) == (void*)-1){
+		if(verbose)
+			fprint(2, "linuxrun: reserve materialize %#lux +%#lux: %r (optimistic)\n",
+				addr, len);
+	}
+	return 0;
+}
+
 static void
 zerorange(ulong va, ulong len)
 {
@@ -1059,21 +1147,64 @@ sysmmap(ulong addr, ulong len, ulong prot, ulong flags, ulong fd, ulong off)
 {
 	ulong va;
 
-	USED(prot);
 	if(verbose)
-		fprint(2, "linuxrun: mmap? addr=%#lux len=%#lux flags=%#lux fd=%d off=%#lux\n",
-			addr, len, flags, (int)fd, off);
+		fprint(2, "linuxrun: mmap? addr=%#lux len=%#lux prot=%lux flags=%#lux fd=%d off=%#lux\n",
+			addr, len, prot, flags, (int)fd, off);
 	if(len == 0)
 		return -Einval;
 	len = ((len + Pgsz-1) / Pgsz) * Pgsz;
+	if(prot == 0 && (flags & 0x20) && len >= 0x10000000){
+		/* anonymous PROT_NONE of 256MB or more: a giant reservation,
+		 * not memory (Wine's virtual_init reserves its whole views
+		 * area, about 2GB, this way).  Record it - even MAP_FIXED,
+		 * which must not unmap our runtime areas - and let mprotect
+		 * materialize on demand.  Smaller PROT_NONE mappings keep
+		 * the backed path: ld.so guards libraries with them and its
+		 * version checks read through them. */
+		if(flags & 0x10){
+			if(addr == 0)
+				return -Einval;
+			resvdrop(addr, len);
+			resvadd(addr, len);
+			if(verbose)
+				fprint(2, "linuxrun: reserve fixed %#lux +%#lux\n",
+					addr, len);
+			return addr;
+		}
+		if(addr != 0 && addr >= Mapbase && addr + len <= Mapbase + Mapsize)
+			va = addr;
+		else{
+			if(mapbump + len > Mapbase + Mapsize)
+				return -Enomem;
+			va = mapbump;
+			mapbump += len;
+		}
+		resvdrop(va, len);
+		resvadd(va, len);
+		if(verbose)
+			fprint(2, "linuxrun: reserve %#lux +%#lux -> %#lux\n",
+				addr, len, va);
+		return va;
+	}
 	if(flags & 0x10){	/* MAP_FIXED: the caller chose the address */
-		if(addr == 0 || addr + len > Mapbase + Mapsize || addr < Mapbase)
+		if(addr == 0 || addr + len > Mapbase + Mapsize)
 			return -Enomem;
+		if(addr < Mapbase){
+			ensurelow();
+			if(!lowseg || addr < Lowbase)
+				return -Enomem;
+		}
 		va = addr;
 		zerorange(va, len);
 	}else{
-		if(addr != 0 && addr >= Mapbase && addr + len <= Mapbase + Mapsize)
+		if(addr != 0 && addr >= Lowbase && addr + len <= Mapbase + Mapsize){
+			if(addr < Mapbase){
+				ensurelow();
+				if(!lowseg)
+					return -Enomem;
+			}
 			va = addr;	/* hint we can honour */
+		}
 		else{
 			if(mapbump + len > Mapbase + Mapsize)
 				return -Enomem;
@@ -3691,7 +3822,19 @@ dosyscall(Ureg *ur)
 		}
 		r = 0;
 		break;
-	case 125:	/* mprotect */
+	case 125:	/* mprotect: materialize reserved ranges on demand */
+		{
+			ulong mlen;
+
+			mlen = ((a2 + Pgsz-1) / Pgsz) * Pgsz;
+			if(a3 != 0)
+				r = resvmaterialize(a1, mlen);
+			else{
+				resvdrop(a1, mlen);
+				r = 0;
+			}
+		}
+		break;
 	case 219:	/* madvise */
 	case 172:	/* prctl */
 	case 175:	/* rt_sigprocmask */
@@ -4103,6 +4246,10 @@ dosyscall(Ureg *ur)
 				}
 				initedtls = 0;
 				listenerfd = -1;
+				/* segments do not survive rfork: the main map
+				 * is re-attached below, the low segment on
+				 * demand */
+				lowseg = 0;
 				if(forkready[0] >= 0)
 					close(forkready[0]);
 				/* the note-stack segment came along COW: just

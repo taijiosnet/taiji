@@ -57,6 +57,33 @@ Syscall and runtime work landed from these measurements:
   and `realpath` probes every component.
 - `faccessat` (307) and `faccessat2` (439) are implemented.
 
+## Round 10 (2026-09-19): virtual_init decoded further; two real bugs fixed
+
+With the signal subsystem in place, the probe now shows Wine's own error
+before any fault: `virtual_init: Assertion 'alloc_views.base != MAP_FAILED'
+failed` — Wine builds its views area from **many small fixed mappings at
+low addresses** (0xe40000 onward), not one giant reservation, and every
+one failed against the `[0x40000000, +512MB)` mmap window. Changes:
+
+- `mprotect` no longer zeroes the target range unless it was actually a
+  recorded reservation — the first cut wiped loaded libraries (libc's
+  version tables), which broke every dynamic program (`libbrotlicommon:
+  undefined symbol: free`). This bug was caught by the unified smoke
+  before it could ship.
+- Giant anonymous `PROT_NONE` mappings (256MB+) are recorded as virtual
+  reservations; `mprotect` materializes only recorded ranges.
+- Low guest memory (`[0x200000, +Lowsize)`) attaches on demand so low
+  fixed mappings can succeed; fork children reset the flag because
+  segments do not survive `rfork`.
+
+Remaining measured limit: the 1GB VM cannot host a second large segment
+next to the 512MB main guest segment — `segattach ...: virtual memory
+allocation failed` for every size from 1GB down to 127MB. The clean next
+steps are to raise the VM's memory (`q9`'s `-m`) or to restructure the
+guest memory into one segment spanning both regions; with low memory
+backed, Wine's views build and the notepad path continues. Wine now exits
+cleanly instead of crashing.
+
 ## The decoded fault and the missing subsystem (2026-09-19, third measurement round)
 
 The round-7 claim that the crash note "never reaches userspace handlers" was
