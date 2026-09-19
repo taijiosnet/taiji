@@ -858,6 +858,10 @@ TEXT fpclear(SB), $0				/* clear pending exceptions */
 TEXT fpssesave0(SB), $0				/* save state and disable */
 	MOVL	p+0(FP), AX
 	FXSAVE					/* no WAIT */
+	/* Unlike FSAVE, FXSAVE leaves pending exceptions in the live FPU.
+	 * Preserve them in the saved state, then clear before FPOFF's WAIT.
+	 * Otherwise a pending user exception recurses inside matherror. */
+	FCLEX					/* no WAIT */
 	FPOFF(l4)
 	RET
 

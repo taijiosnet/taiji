@@ -39,6 +39,9 @@ enum {
 	Win=		Spec|0x68,
 	MacCmd=		Spec|0x68,
 	Kmouse=		Spec|0x100,
+	/* Ctrl+Tab chord emitted by kbtabctrl; rio9 consumes it for task
+	 * switching.  Mirrors Kctab in /sys/include/keyboard.h. */
+	Ctab=		KF|0x19,
 	No=		0x00,		/* peter */
 
 	Home=		KF|13,
@@ -148,7 +151,7 @@ Rune kbtabaltgr[Nscan] =
 Rune kbtabctrl[Nscan] =
 {
 [0x00]	No,	'', 	'', 	'', 	'', 	'', 	'', 	'',
-[0x08]	'', 	'', 	'', 	'', 	'', 	'', 	'\b',	'\t',
+[0x08]	'', 	'', 	'', 	'', 	'', 	'', 	'\b',	Ctab,
 [0x10]	'', 	'', 	'', 	'', 	'', 	'', 	'', 	'\t',
 [0x18]	'', 	'', 	'', 	'', 	'\n',	Ctrl,	'', 	'',
 [0x20]	'', 	'', 	'', 	'\b',	'\n',	'', 	'', 	'',

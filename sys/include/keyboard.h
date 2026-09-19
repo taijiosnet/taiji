@@ -39,6 +39,10 @@ enum {
 	Kshift=	KF|0x16,
 	Kctl=		KF|0x17,
 
+	/* The kernel's ctrl key table emits this for Ctrl+Tab.  rio9 uses the
+	 * chord for keyboard task switching and never forwards it to clients. */
+	Kctab=		KF|0x19,
+
 	Kbs=	0x08,
 	Kdel=	0x7f,
 	Kesc=	0x1b,
