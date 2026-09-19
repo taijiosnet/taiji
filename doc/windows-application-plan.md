@@ -139,6 +139,20 @@ window of the exec/clone child (argument copying, fork snapshot, or the
 child resume itself touching guest memory whose segment attach ordering
 has changed).
 
+
+## Round 13 (2026-09-19): the frontier pc decoded
+
+The faulting pc 0x13fdf is decoded from the binary: `mov eax,0x13; int
+$0x40` - a native Plan 9 syscall stub, i.e. linuxrun itself passed the
+guest pointer 0x6001d874 to a host read/write-style call while its
+segment was not mapped (the neighbouring stubs at 0x12fdf-0x1300f are
+the int 0x40 dispatch family).  The investigation therefore moves from
+child note dispatch to the native-call sites that accept guest
+pointers - file read/readat paths, socket reads, and the exec/fork
+child's re-attach ordering - none of which validate the segment before
+the call.  That validation (and a diagnostic naming the call site) is
+the next increment.
+
 ## Architecture decision to make next
 
 Run Wine directly under `linuxrun` (one translation layer, best
