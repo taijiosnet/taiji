@@ -3495,7 +3495,8 @@ dosyscall(Ureg *ur)
 					fprint(2, "linuxrun:  sys-%d nr=%lux a1=%lux a2=%lux a3=%lux\n",
 						i, sysring[ri][0], sysring[ri][1], sysring[ri][2], sysring[ri][3]);
 			}
-			if(ur->sp > 0x10000 && ur->sp < 0x70000000){
+			if(ur->sp > 0x10000 && ur->sp < 0x70000000 &&
+			   guestok(ur->sp, 64)){
 				stk = (ulong*)ur->sp;
 				for(i = 0; i < 16; i++)
 					fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);
@@ -5681,7 +5682,8 @@ traphandler(void *v, char *msg)
 						i, sysring[ri][0], sysring[ri][1], sysring[ri][2], sysring[ri][3]);
 			}
 			dumpsegments();
-			if(ur->sp > 0x10000 && ur->sp < 0x70000000){
+			if(ur->sp > 0x10000 && ur->sp < 0x70000000 &&
+			   guestok(ur->sp, 64)){
 				stk = (ulong*)ur->sp;
 				for(i = 0; i < 16; i++)
 					fprint(2, "linuxrun:  sp+%d = %lux\n", i*4, stk[i]);

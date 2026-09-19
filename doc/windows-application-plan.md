@@ -153,6 +153,20 @@ child's re-attach ordering - none of which validate the segment before
 the call.  That validation (and a diagnostic naming the call site) is
 the next increment.
 
+
+## Round 17 (2026-09-19): the frontier syscall named
+
+The crash-report stack dumps are guarded (guestok), so diagnostics no longer
+mask the underlying fault.  With the stub table decoded from the binary and
+correlated against the kernel's systab.h, the faulting native stub at
+pc 0x1435b loads syscall 19 - stat under the 1-indexed table, rfork under
+the alternative numbering - either way a native call receiving a guest
+stack pointer (0x6001d874) from a context where that segment is absent.
+The fork-rebuild path (child detaches and re-attaches every guest segment,
+then copies parent memory through /proc/ppid/mem) is the prime suspect;
+verifying which numbering applies and instrumenting that copy loop is the
+next live-debugging step.
+
 ## Architecture decision to make next
 
 Run Wine directly under `linuxrun` (one translation layer, best
