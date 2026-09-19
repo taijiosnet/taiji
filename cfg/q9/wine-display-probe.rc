@@ -31,7 +31,7 @@ if(~ $ready no){
 	exit failed
 }
 echo taiji-wine-xvfb-ready
-debian-session /taiji/bin/linuxrun -e 'WINEDEBUG=-all' -e 'HOME=/home/user' -e 'DISPLAY=:61' /usr/lib/wine/wine notepad >/tmp/wine-notepad.log >[2=1] &
+LINUXRUN_LOW=1 debian-session /taiji/bin/linuxrun -e 'WINEDEBUG=-all' -e 'HOME=/home/user' -e 'DISPLAY=:61' /usr/lib/wine/wine notepad >/tmp/wine-notepad.log >[2=1] &
 npid=$apid
 for(i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30)
 	sleep 1

@@ -1086,16 +1086,29 @@ static void	zerorange(ulong, ulong);
  * views from small fixed mappings at low addresses that the main guest
  * segment does not cover.  Sized to what the VM can spare next to the
  * main segment. */
-enum { Lowbase = 0x200000, Lowsize = 0x1fe00000 };
+enum { Lowbase = 0x200000, Lowsize = 0x7e00000 };	/* the notestack's shared segment sits at 0x8000000 */
 static int lowseg;
 
 static void
 ensurelow(void)
 {
 	if(!lowseg){
-		if(segat(Lowbase, Lowsize) != (void*)-1)
+		/* Opt-in (LINUXRUN_LOW in the host environment): Wine needs
+		 * low guest memory, but attaching it changes the note-frame
+		 * behavior enough to destabilize ordinary guests (the
+		 * unified smoke's Xvfb child dies with note-stack pointers
+		 * leaking into syscalls).  The lazy note-context path below
+		 * stays harmless for everyone else. */
+		if(getenv("LINUXRUN_LOW") == nil)
+			return;
+		if(segattach(0, "memory", (void*)Lowbase, Lowsize) != (void*)-1){
 			lowseg = 1;
-		else if(verbose)
+			if(nguestsegs < 16){
+				guestsegs[nguestsegs][0] = Lowbase;
+				guestsegs[nguestsegs][1] = Lowsize;
+				nguestsegs++;
+			}
+		}else if(verbose)
 			fprint(2, "linuxrun: low segment attach failed: %r\n");
 	}
 }
@@ -5948,6 +5961,8 @@ main(int argc, char *argv[])
 
 	brkcur = Brkbase;
 	segat(Mapbase, Mapsize);
+	/* see the exec path: low memory must attach outside note context */
+	ensurelow();
 
 	forkscratch = nil;	/* kernel COW replaced the snapshot;
 				 * the scratch starved the note stack */
