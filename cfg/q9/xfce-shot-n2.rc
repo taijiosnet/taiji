@@ -1,0 +1,26 @@
+#!/bin/rc
+rm -f /debian/rootfs/tmp/n-shot1.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+echo defaults-check
+debian-session -c 'linuxrun /bin/cat /usr/share/xfwm4/defaults' >[2=1] /debian/rootfs/tmp/n-defaults.txt &
+sleep 15
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /debian/rootfs/tmp/n2-xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2=1] /debian/rootfs/tmp/n2-xeyes.log &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' >[2=1] /debian/rootfs/tmp/n2-xfwm4.log &
+sleep 240
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/n-shot1.xwd' >[2] /debian/rootfs/tmp/n2-xwd.log &
+sleep 300
+echo shot-try1
+ls -l /debian/rootfs/tmp/n-shot1.xwd
+cp /debian/rootfs/tmp/n-shot1.xwd /debian/rootfs/shot1.xwd
+echo xfwm4-log
+sed -n '1,120p' /debian/rootfs/tmp/n2-xfwm4.log
+echo defaults-dump
+cat /debian/rootfs/tmp/n-defaults.txt
+echo xfce-shot-done

@@ -1,0 +1,103 @@
+#!/bin/rc
+
+# A Debian application gets a private display and the user's Documents.
+# Xvfb and the app execute on Taiji's kernel through linuxrun.
+rfork en
+title=()
+if(~ $1 -t){
+	if(~ $#* 1 2){
+		echo 'usage: linux-app [-t title] program [args ...]' >[1=2]
+		exit usage
+	}
+	title=$2
+	shift 2
+}
+if(~ $#* 0){
+	echo 'usage: linux-app [-t title] program [args ...]' >[1=2]
+	exit usage
+}
+if(! test -x /bin/xbridge){
+	echo 'linux-app: install xbridge first' >[1=2]
+	exit install
+}
+if(! test -d /debian/rootfs){
+	echo 'linux-app: no Debian runtime at /debian/rootfs' >[1=2]
+	echo 'linux-app: prepare the Debian i386 runtime before launching applications' >[1=2]
+	exit runtime
+}
+program=$1
+if(~ $#title 0)
+	title=`{basename $program}
+shift
+if(! ~ $program /*)
+	program=/usr/bin/^$program
+if(! test -x /debian/rootfs^$program){
+	echo 'linux-app: application is not installed: '^$program >[1=2]
+	echo 'linux-app: install it in the Debian runtime, then launch again' >[1=2]
+	exit application
+}
+if(! test -x /debian/rootfs/usr/bin/Xvfb){
+	echo 'linux-app: install Debian Xvfb first' >[1=2]
+	echo 'linux-app: applications need Xvfb, its libraries and fonts' >[1=2]
+	exit display
+}
+if(! test -x /bin/linuxrun){
+	echo 'linux-app: install linuxrun first' >[1=2]
+	exit runtime
+}
+echo 'Starting '^$title^'...'
+# Keep X locks, sockets and temporary files local to this launch.  They
+# must not survive a reboot or collide with another application's display.
+ramfs
+bind -c /tmp /debian/rootfs/tmp || exit temporary-files
+displayno=$pid
+socket=/debian/rootfs/tmp/.X11-unix/X^$displayno
+DISPLAY=:^$displayno
+GDK_GL=disable
+NO_AT_BRIDGE=1
+
+fn stopapps {
+	for(p in $apppid $serverpid){
+		if(test -e /proc/$p/ctl)
+			echo kill >/proc/$p/ctl
+	}
+}
+fn sighup { stopapps; exit }
+fn sigint { stopapps; exit }
+
+# Start the display larger than any expected window: this Xvfb caps the
+# RandR screen range at its start size, and xbridge shrinks the X screen
+# to fit the native window on launch and follows resizes afterward.
+debian-session /taiji/bin/linuxrun /usr/bin/Xvfb $DISPLAY -screen 0 1920x1080x24 -nolisten tcp -extension GLX >[2] /tmp/linux-app-$pid-server.log &
+serverpid=$apid
+ready=no
+for(attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30){
+	if(~ $ready no){
+		if(test -e $socket^.req)
+			ready=yes
+		if not{
+			echo -n .
+			sleep 1
+		}
+	}
+}
+echo
+if(~ $ready no){
+	echo 'linux-app: display did not start' >[1=2]
+	cat /tmp/linux-app-$pid-server.log >[1=2]
+	stopapps
+	exit display
+}
+debian-session /taiji/bin/linuxrun $program $* >[2] /tmp/linux-app-$pid.log &
+apppid=$apid
+xbridge -p $apppid -t $title $socket
+result=$status
+stopapps
+# Keep the failure visible in the launching window instead of closing it
+# silently: the application's own messages usually name the cause.
+if(! ~ $result '' nil){
+	echo 'linux-app: '^$title^' stopped: '^$result
+	if(test -s /tmp/linux-app-$pid.log)
+		tail -n 15 /tmp/linux-app-$pid.log
+}
+exit $result

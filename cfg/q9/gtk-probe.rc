@@ -1,0 +1,17 @@
+#!/bin/rc
+rm -f /debian/rootfs/tmp/shot1.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
+sleep 75
+echo xvfb-up
+#debian-session -c 'SHELL=/bin/sh linuxrun /usr/bin/xfwm4 --display :0' >[2] /tmp/probe.log &
+sleep 420
+echo probe-done
+echo xvfb-log
+cat /tmp/xvfb.log
+echo probe-log
+cat /tmp/probe.log
+echo probe-ps
+ps
+echo gtk-probe-rc-done

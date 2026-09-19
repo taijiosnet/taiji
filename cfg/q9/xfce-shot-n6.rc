@@ -1,0 +1,23 @@
+#!/bin/rc
+# full stack: Xvfb + session dbus + xeyes + xfwm4, then capture.
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+rm -f /debian/rootfs/tmp/dbus-1
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/dbus-daemon --session --address=unix:path=/tmp/dbus-1 --nofork --nopidfile' &
+sleep 30
+echo dbus-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+sleep 240
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot6.xwd' &
+sleep 300
+echo shot-try1
+ls -l /debian/rootfs/tmp/shot6.xwd
+cp /debian/rootfs/tmp/shot6.xwd /debian/rootfs/shot1.xwd
+echo xfce-shot-done

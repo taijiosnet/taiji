@@ -1,0 +1,26 @@
+#!/bin/rc
+rm -f /debian/rootfs/tmp/shot1.xwd
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2] /tmp/xeyes.log &
+sleep 240
+echo xeyes-phase
+#debian-session -c 'SHELL=/bin/sh linuxrun /usr/bin/xfwm4 --display :0' >[2] /tmp/xfwm4.log &
+sleep 420
+echo xfwm4-phase
+#debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot1.xwd' >[2] /tmp/xwd1.log &
+sleep 600
+echo shot1-phase
+cp /debian/rootfs/tmp/shot1.xwd /debian/rootfs/shot1.xwd
+echo shot-ls
+ls -l /debian/rootfs/shot1.xwd
+echo ps
+ps
+echo log-xwd1
+cat /tmp/xwd1.log
+echo log-xeyes
+cat /tmp/xeyes.log
+echo bisect-done

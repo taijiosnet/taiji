@@ -1,0 +1,35 @@
+#!/bin/rc
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' &
+sleep 240
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot5.xwd' &
+sleep 240
+echo wedges
+ps
+for(f in /proc/[0-9]*/args) { }
+echo procsys
+for(d in /proc/[0-9]*) {
+	if(test -f $d^/args) {
+		echo == $d
+		cat $d^/args
+		if(test -f $d^/syscall) {
+			echo syscall:
+			cat $d^/syscall
+		}
+	}
+}
+echo second-shot
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot5.xwd' &
+sleep 300
+echo shot-try
+ls -l /debian/rootfs/tmp/shot5.xwd
+cp /debian/rootfs/tmp/shot5.xwd /debian/rootfs/shot1.xwd
+echo xfce-shot-done

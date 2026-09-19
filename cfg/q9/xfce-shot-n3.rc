@@ -1,0 +1,28 @@
+#!/bin/rc
+# xfce screenshot run: Xvfb + xeyes + xfwm4 (GDK_GL=disable comes from
+# linuxrun's genv).  Logs go to guest RAM and are dumped to the serial
+# console at the end - the ufs share is unreliable under sustained
+# logging.  The shot is copied through ufs once, at the very end.
+mkdir -p /debian/rootfs/tmp/.X11-unix
+rm -f /debian/rootfs/tmp/.X0-lock /debian/rootfs/tmp/.X11-unix/X0.req /debian/rootfs/tmp/.X11-unix/X0.q
+debian-session -c 'linuxrun /usr/bin/Xvfb :0 -screen 0 1024x768x24' >[2] /tmp/n3-xvfb.log &
+sleep 75
+echo xvfb-up
+debian-session -c 'linuxrun /usr/bin/xeyes -display :0 -geometry +400+300' >[2=1] /tmp/n3-xeyes.log &
+sleep 300
+echo xeyes-phase
+debian-session -c 'linuxrun /usr/bin/xfwm4 --display :0' >[2=1] /tmp/n3-xfwm4.log &
+sleep 240
+echo xfwm4-phase
+debian-session -c 'linuxrun /usr/bin/xwd -root -out /tmp/shot3.xwd' >[2=1] /tmp/n3-xwd.log &
+sleep 300
+echo shot-try1
+ls -l /debian/rootfs/tmp/shot3.xwd
+cp /debian/rootfs/tmp/shot3.xwd /debian/rootfs/shot1.xwd
+echo xfwm4-log
+sed -n '1,120p' /tmp/n3-xfwm4.log
+echo xwd-log
+sed -n '1,20p' /tmp/n3-xwd.log
+echo ps
+ps
+echo xfce-shot-done

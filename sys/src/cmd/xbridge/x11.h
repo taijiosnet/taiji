@@ -1,0 +1,33 @@
+typedef struct Xconn Xconn;
+struct Xconn {
+	int rd, wr;
+	ushort seq;
+	ulong root, base, mask;
+	int width, height, depth, bpp, order;
+	int minkey, maxkey, nsyms, xtest, randr, rrver;
+	int rrminw, rrminh, rrmaxw, rrmaxh;
+	ulong keys[256][8];
+	uchar events[64][32];
+	int nevents;
+	char ticket[512], postread[96], postwrite[96];
+};
+
+uint x16(uchar*);
+ulong x32(uchar*);
+void p16(uchar*, uint);
+void p32(uchar*, ulong);
+void xconnect(Xconn*, char*);
+void xclose(Xconn*);
+void xsend(Xconn*, uchar*, int);
+uchar *xreply(Xconn*, uchar*, int*);
+ulong xatom(Xconn*, char*);
+void xinput(Xconn*, int, int, int, int);
+void xkey(Xconn*, Rune);
+int xrequestclose(Xconn*);
+uchar *ximage(Xconn*, int*);
+ulong xowner(Xconn*, ulong);
+void xown(Xconn*, ulong, ulong);
+void xconvert(Xconn*, ulong, ulong, ulong, ulong);
+void xproperty(Xconn*, ulong, ulong, ulong, int, uchar*, int);
+uchar *xgetproperty(Xconn*, ulong, ulong, ulong*, int*, int*);
+int xresize(Xconn*, int, int);

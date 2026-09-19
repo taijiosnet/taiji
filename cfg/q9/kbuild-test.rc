@@ -1,0 +1,8 @@
+#!/bin/rc
+echo kbuild-start
+cd /sys/src/9/pc
+CONF=9pc mk install
+cd /sys/src/cmd/linuxrun
+mk install
+mk clean
+rc /cfg/q9/xfce-test.rc
