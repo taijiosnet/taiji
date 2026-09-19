@@ -57,19 +57,47 @@ Syscall and runtime work landed from these measurements:
   and `realpath` probes every component.
 - `faccessat` (307) and `faccessat2` (439) are implemented.
 
-The next targets on the Wine path, in order: the general-protection
-violation's note **never reaches userspace handlers in the forked child**
-— verified with an unconditional print at the top of `traphandler`, which
-stays silent while the child dies — so the fault is swallowed before
-`FAULTCODE` can dump the instruction bytes. The delivery gap is in the
-note-stack mechanism for foreign processes (the fork-parked child's
-note-stack segment is a COW remnant; see `registernotestack` and the
-kernel's foreign-process note paths in `trap.c`). Fixing that delivery —
-in the kernel's `postnote`/`notify` handling for `up->foreign` processes
-or in the child's note-stack re-registration — is the prerequisite step;
-afterward the `FAULTCODE` bytes identify the instruction to emulate, and
-then notepad can reach a mapped window, wineserver can be verified, and
-a Windows launcher can follow the Text Editor pattern.
+## The decoded fault and the missing subsystem (2026-09-19, third measurement round)
+
+The round-7 claim that the crash note "never reaches userspace handlers" was
+an artifact of reading a `tail`-truncated probe log; the corrected
+full-log probe shows `traphandler` running and `FAULTCODE` firing. The
+faulting instruction at `pc=0x4082531a` is **`hlt` (0xF4)** — a deliberate
+user-mode privileged fault, surrounded by Wine state-machine code:
+
+```
+f4                       ; hlt  ← the fault
+83 bd bc 12 00 00 05     ; cmp dword [ebp+0x12bc], 5
+75 14                    ; jne
+c7 85 bc 12 00 00 06 ... ; mov dword [ebp+0x12bc], 6
+83 ec 0c / 6a 7f / e8 .. ; push 127; call ...
+f4 / eb fd               ; hlt; jmp $
+```
+
+Wine's i386 runtime uses deliberate faults as dispatch points and
+services them from **SIGSEGV handlers it registers with `rt_sigaction`**.
+`linuxrun` stubs `rt_sigaction` (and the whole signal family) to success
+without bookkeeping, so no signal is ever delivered and the fault kills
+the process.
+
+The prerequisite subsystem is therefore **Linux i386 signal delivery**:
+
+1. `rt_sigaction` (174): record handler, flags, restorer, and mask from
+   the guest's `struct kernel_sigaction` (i386: handler, flags, restorer,
+   mask; sigsetsize at a4).
+2. On privileged-fault notes (and `SIGSEGV`-class guest faults): build an
+   i386 `rt_sigframe` on the guest stack — `pretcode`, `sig`, `pinfo`,
+   `puc`, 128-byte `siginfo` (si_signo/si_code/si_addr for the fault),
+   `ucontext` with the full register set and FP state, the guest's signal
+   mask, and the `rt_sigreturn` trampoline
+   (`popl %eax; movl $173,%eax; int $0x80`) — then set the guest's pc to
+   the registered handler and sp to the frame. Exact layouts come from
+   the Linux UAPI headers (`sigcontext_32`, `ucontext_i386`).
+3. `rt_sigreturn` (173): restore the saved context from the frame.
+
+With that in place, Wine's own dispatcher services the `hlt` thunk, and
+notepad can proceed toward a mapped window. `FAULTCODE` and the corrected
+full-log probe (`cat`, not `tail`) stay in the tree as the instruments.
 
 ## Architecture decision to make next
 
