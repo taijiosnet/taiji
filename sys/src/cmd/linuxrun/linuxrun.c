@@ -4443,13 +4443,18 @@ dosyscall(Ureg *ur)
 
 			/* copy the strings now: sysexecve detaches the old
 			 * image (including the guest stack they live on)
-			 * before buildstack reads them back */
+			 * before buildstack reads them back.  Wine execs
+			 * with argv/env on a 0xdfff-region stack that no
+			 * segment covers - back it before reading. */
 			j = 0;
 			k = 0;
+			ensurestack(a2);
+			ensurestack(a3);
 			ap = (ulong*)a2;
 			for(na = 0; na < 255 && ap != nil && ap[na] != 0; na++){
 				int m;
 
+				ensurestack(ap[na]);
 				m = strlen((char*)ap[na]);
 				if(k + m + 1 >= sizeof argstr)
 					break;
