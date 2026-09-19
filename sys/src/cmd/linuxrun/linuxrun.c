@@ -5159,6 +5159,17 @@ traphandler(void *v, char *msg)
 	if(v == nil)
 		return 0;
 	ur = v;
+	{
+		/* unconditional, tightly capped: every note with its pc.  A
+		 * forked foreign child can die on a trap note that never
+		 * reaches this handler (note-stack remnant); this print is
+		 * what proves that dispatch happened or not */
+		static int zn;
+
+		if(zn++ < 12)
+			fprint(2, "linuxrun: NOTE p%d pc=%lux %s\n",
+				getpid(), ur->pc, msg ? msg : "?");
+	}
 	if(msg != nil && strcmp(msg, "alarm") == 0){
 		/* the dispatcher re-arms a 2s alarm on every syscall: each
 		 * note samples the guest wherever it is - userspace loops

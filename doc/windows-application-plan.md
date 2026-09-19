@@ -57,13 +57,19 @@ Syscall and runtime work landed from these measurements:
   and `realpath` probes every component.
 - `faccessat` (307) and `faccessat2` (439) are implemented.
 
-The next targets on the Wine path, in order: decode the faulting
-instruction behind the general-protection violation (add a code-bytes
-dump at the fault pc to linuxrun's crash report; the fault is likely a
-segment-register or privileged operation Wine's thread setup uses that
-needs emulation), then give notepad a path to map a window, verify
-wineserver's socket protocol under the translated syscalls, and wire a
-Windows launcher through `linux-app` following the Text Editor pattern.
+The next targets on the Wine path, in order: the general-protection
+violation's note **never reaches userspace handlers in the forked child**
+— verified with an unconditional print at the top of `traphandler`, which
+stays silent while the child dies — so the fault is swallowed before
+`FAULTCODE` can dump the instruction bytes. The delivery gap is in the
+note-stack mechanism for foreign processes (the fork-parked child's
+note-stack segment is a COW remnant; see `registernotestack` and the
+kernel's foreign-process note paths in `trap.c`). Fixing that delivery —
+in the kernel's `postnote`/`notify` handling for `up->foreign` processes
+or in the child's note-stack re-registration — is the prerequisite step;
+afterward the `FAULTCODE` bytes identify the instruction to emulate, and
+then notepad can reach a mapped window, wineserver can be verified, and
+a Windows launcher can follow the Text Editor pattern.
 
 ## Architecture decision to make next
 
