@@ -1,4 +1,0 @@
-# namespace|display name|description|command
-plan9|Rill|Taiji desktop namespace|rill
-plan9|Rio|Original Rio namespace|rio9 -k 'rc -i'
-debian|Rill|Taiji desktop in the Debian root|debian-session rill

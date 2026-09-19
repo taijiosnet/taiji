@@ -44,6 +44,8 @@ void	initcmd(void*);
 
 char		*fontname;
 int		mainpid;
+Image	*desktopimage;
+static char *desktopcmd;
 
 enum
 {
@@ -111,7 +113,7 @@ derror(Display*, char *errorstr)
 void
 usage(void)
 {
-	fprint(2, "usage: rio [-f font] [-i initcmd] [-k kbdcmd] [-s]\n");
+	fprint(2, "usage: rio [-d desktopcmd] [-f font] [-i initcmd] [-k kbdcmd] [-s]\n");
 	exits("usage");
 }
 
@@ -132,6 +134,11 @@ threadmain(int argc, char *argv[])
 	kbdin = nil;
 	maxtab = 0;
 	ARGBEGIN{
+	case 'd':
+		desktopcmd = ARGF();
+		if(desktopcmd == nil)
+			usage();
+		break;
 	case 'f':
 		fontname = ARGF();
 		if(fontname == nil)
@@ -213,6 +220,20 @@ threadmain(int argc, char *argv[])
 		fprint(2, "rio: can't create file system server: %r\n");
 	else{
 		errorshouldabort = 1;	/* suicide if there's trouble after this */
+		if(desktopcmd != nil){
+			char *args[4];
+			Window *desktop;
+
+			args[0] = "rc";
+			args[1] = "-c";
+			args[2] = desktopcmd;
+			args[3] = nil;
+			desktopimage = allocwindow(wscreen, screen->r, Refbackup, DWhite);
+			desktop = new(desktopimage, FALSE, FALSE, 0, nil, "/bin/rc", args);
+			if(desktop == nil)
+				error("cannot start desktop");
+			wbottomme(desktop);
+		}
 		if(initstr)
 			proccreate(initcmd, initstr, STACK);
 		if(kbdin){
@@ -329,11 +350,35 @@ killprocs(void)
 		postnote(PNGROUP, window[i]->pid, "hangup");
 }
 
+/* Ctrl+Tab cycles application windows.  The same activation path as a
+ * taskbar click restores hidden windows and completes after any pointer
+ * button is released. */
+static void
+cyclenextwindow(void)
+{
+	Window *w;
+	int i, start;
+
+	if(nwindow < 2)
+		return;
+	start = 0;
+	for(i = 0; i < nwindow; i++)
+		if(window[i] == input)
+			start = i;
+	for(i = 1; i <= nwindow; i++){
+		w = window[(start+i)%nwindow];
+		if(w == nil || w->deleted || w->i == nil || w->desktop)
+			continue;
+		wactivate(w->id);
+		return;
+	}
+}
+
 void
 keyboardthread(void*)
 {
 	Rune buf[2][20], *rp;
-	int n, i;
+	int n, i, chord;
 
 	threadsetname("keyboardthread");
 	n = 0;
@@ -345,7 +390,19 @@ keyboardthread(void*)
 			if(nbrecv(keyboardctl->c, rp+i) <= 0)
 				break;
 		rp[i] = L'\0';
-		if(input != nil)
+		/* Ctrl+Tab cycles application windows; it is consumed here so
+		 * clients, including the desktop, never see the chord. */
+		chord = 0;
+		for(i=0; rp[i] != L'\0'; i++)
+			if(rp[i] == Kctab){
+				memmove(rp+i, rp+i+1,
+					(runestrlen(rp+i+1)+1)*sizeof(Rune));
+				i--;
+				chord = 1;
+			}
+		if(chord)
+			cyclenextwindow();
+		if(input != nil && rp[0] != L'\0')
 			sendp(input->ck, rp);
 	}
 }
@@ -513,7 +570,10 @@ mousethread(void*)
 				if((mouse->buttons&(8|16)) && !winput->mouseopen)
 					goto Sending;
 
-				inside = ptinrect(mouse->xy, insetrect(winput->screenr, Selborder));
+				inside = ptinrect(mouse->xy, insetrect(winput->screenr, Selborder)) &&
+					wpointto(mouse->xy) == winput;
+				if(winput->desktop)
+					inside = wpointto(mouse->xy) == winput;
 				if(winput->mouseopen)
 					scrolling = FALSE;
 				else if(scrolling)
@@ -537,6 +597,8 @@ mousethread(void*)
 				tmp = mousectl->Mouse;
 				tmp.xy = xy;
 				send(winput->mc.c, &tmp);
+				if(mouse->buttons == 0)
+					wactivatepending();
 				continue;
 			}
 			w = wpointto(mouse->xy);
@@ -569,6 +631,10 @@ mousethread(void*)
 				cornercursor(w, mouse->xy, 0);
 			/* we're not sending the event, but if button is down maybe we should */
 			if(mouse->buttons){
+				if(w != nil && w->desktop && w != winput){
+					wcurrent(w);
+					goto Again;
+				}
 				/* w->topped will be zero or less if window has been bottomed */
 				if(w==nil || (w==winput && w->topped>0)){
 					if(mouse->buttons & 1){
@@ -587,6 +653,8 @@ mousethread(void*)
 				}
 			}
 			moving = FALSE;
+			if(mouse->buttons == 0)
+				wactivatepending();
 			break;
 
 		Drain:
@@ -611,6 +679,8 @@ resized(void)
 		error("failed to re-attach window");
 	freescrtemps();
 	view = screen;
+	for(i=0; i<nwindow; i++)
+		woverlayclear(window[i]);
 	freescreen(wscreen);
 	wscreen = allocscreen(screen, background, 0);
 	if(wscreen == nil)

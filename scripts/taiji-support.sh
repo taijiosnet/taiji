@@ -13,6 +13,8 @@ usage: scripts/taiji-support.sh ape-smoke
        scripts/taiji-support.sh debian-smoke
        scripts/taiji-support.sh install-linuxrun
        scripts/taiji-support.sh linuxrun-smoke
+       scripts/taiji-support.sh unified-smoke
+       scripts/taiji-support.sh window-smoke
        scripts/taiji-support.sh linux-support-suite
 EOF
 	exit 1
@@ -28,6 +30,7 @@ taiji_guest_expect()
 	name=$1
 	success=$2
 	script=$3
+	bootmode=${4:-tty-run}
 	log=${TAIJI_SUPPORT_LOG:-/tmp/taiji-support-$name.log}
 	pidfile=${TAIJI_SUPPORT_PIDFILE:-/tmp/taiji-support-$name.pid}
 
@@ -35,7 +38,7 @@ taiji_guest_expect()
 	rm -f "$pidfile"
 	(cd "$root" && setsid sh -c 'echo $$ >"$1"; shift; exec "$@"' sh "$pidfile" \
 		env Q9_COPY_IMAGE=1 Q9_TMPDIR="${Q9_TMPDIR:-/tmp}" TMPDIR="${Q9_TMPDIR:-/tmp}" \
-		./q9 --raw --text tty-run "$script") >"$log" 2>&1 &
+		./q9 --raw --headless "$bootmode" "$script") >"$log" 2>&1 &
 	q9_pid=$!
 
 	stop_vm()
@@ -368,6 +371,12 @@ install-linuxrun)
 	;;
 linuxrun-smoke)
 	linuxrun_smoke
+	;;
+unified-smoke)
+	taiji_guest_expect unified-smoke taiji-unified-smoke-ok 'rc /cfg/q9/unified-smoke.rc'
+	;;
+window-smoke)
+	taiji_guest_expect window-smoke taiji-window-smoke-ok 'rc /cfg/q9/window-smoke.rc' run
 	;;
 linux-support-suite)
 	linux_support_suite

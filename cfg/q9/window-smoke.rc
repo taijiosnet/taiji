@@ -1,0 +1,30 @@
+#!/bin/rc
+fn fail {
+	echo taiji-window-failed: $*
+	exit failed
+}
+cd /cfg/q9
+8c -o /tmp/fp-exception.8 fp-exception.c || fail floating-point-compile
+8l -o /tmp/fp-exception /tmp/fp-exception.8 || fail floating-point-link
+/tmp/fp-exception || fail floating-point-exception
+cd /sys/src/cmd/rio9
+mk install || fail window-server-build
+cd /sys/src/cmd/rill
+mk install || fail desktop-build
+cd /cfg/q9
+cpp -+ -I/sys/src/cmd/rill/include -I/sys/src/kryon/src/platform/plan9/include -I/sys/src/kryon/include -DKRYON_NATIVE_PLAN9 window-smoke.c >/tmp/window-smoke.i || fail preprocess
+8c -FTVw -o /tmp/window-smoke.8 /tmp/window-smoke.i || fail compile
+8l -o /tmp/window-smoke /tmp/window-smoke.8 /sys/src/cmd/rill/src/platform_plan9.8 /386/lib/libstdio.a -ldraw || fail link
+result=/usr/glenda/tmp/window-smoke-result
+echo >$result
+rio9 -d '/tmp/window-smoke >/usr/glenda/tmp/window-smoke-result >[2=1]' &
+for(attempt in `{seq 1 30}){
+	if(grep -s 'taiji-window-' $result){
+		cat $result
+		rm -f $result
+		exit
+	}
+	sleep 1
+}
+cat $result
+fail timeout

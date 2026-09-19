@@ -1,0 +1,19 @@
+#!/bin/rc
+# Rebuild rill and diagnose the desktop boot with its output captured.
+cd /sys/src/cmd/rill
+if(! mk install){
+	echo taiji-rill-rebuild-failed
+	exit failed
+}
+echo '--- rill text symbols near the fault ---'
+nm /386/bin/rill | awk '$1 ~ /^[0-9a-f]+$/ { print $1, $2, $3 }' |
+	sort -x | awk '$1 <= "22c064"' | tail -3
+rio9 -d 'rill >/usr/glenda/tmp/rill-boot.log >[2=1]' &
+wm=$apid
+sleep 30
+echo '--- rill boot log ---'
+cat /usr/glenda/tmp/rill-boot.log
+echo '--- processes ---'
+ps | grep -v grep | grep -E 'rill|rio9'
+echo taiji-desktop-diag-done
+

@@ -15,6 +15,7 @@ enum
 	Qsnarf,
 	Qtext,
 	Qwctl,
+	Qwinfo,		/* non-blocking window state snapshot */
 	Qwindow,
 	Qwsys,		/* directory of window directories */
 	Qwsysdir,		/* window directory, child of wsys */
@@ -159,6 +160,7 @@ struct Window
 	int			topped;
 	int			notefd;
 	uchar		scrolling;
+	uchar		desktop;
 	Cursor		cursor;
 	Cursor		*cursorp;
 	uchar		holding;
@@ -193,6 +195,12 @@ void		waddraw(Window*, Rune*, int);
 void		wborder(Window*, int);
 void		wclosewin(Window*);
 void		wcurrent(Window*);
+void		wactivate(int);
+void		wactivatepending(void);
+int		woverlay(Window*, char*, char*);
+void		woverlayclear(Window*);
+void		woverlayraise(void);
+Window*	woverlaypoint(Point);
 void		wcut(Window*);
 void		wdelete(Window*, uint, uint);
 void		wdoubleclick(Window*, uint*, uint*);

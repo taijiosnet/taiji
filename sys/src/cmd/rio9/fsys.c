@@ -38,6 +38,7 @@ Dirtab dirtab[]=
 	{ "text",		QTFILE,	Qtext,		0400 },
 	{ "wdir",		QTFILE,	Qwdir,		0600 },
 	{ "wctl",		QTFILE,	Qwctl,		0600 },
+	{ "winfo",		QTFILE,	Qwinfo,		0400 },
 	{ "window",	QTFILE,	Qwindow,		0400 },
 	{ "wsys",		QTDIR,	Qwsys,		0500|DMDIR },
 	{ nil, }

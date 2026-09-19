@@ -1,5 +1,6 @@
 #include <u.h>
 #include <libc.h>
+#include "environment.h"
 #include </386/include/ureg.h>
 typedef struct Ureg Ureg;
 
@@ -223,30 +224,6 @@ char connpath[256];	/* path this process connected to as a client */
 int listenfd = -1;	/* guest fd of the listener socket */
 int nepollsets;
 
-char *genv[] = {
-	"LD_BIND_NOW=1",
-	"PATH=/bin:/usr/bin:/sbin:/usr/sbin",
-	"HOME=/root",
-	"DISPLAY=:0",
-	/* xfwm4 without xfconf shows a startup-failure helper dialog
-	 * whose paint stalls under the emulator - give every guest the
-	 * session bus launched by the run script instead */
-	"DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-1",
-	/* GTK3 X11 probes GLX for every window; under the emulator the
-	 * probe's GL teardown retries forever, so skip client GL here */
-	"GDK_GL=disable",
-	/* the at-spi a11y bridge opens extra display connections and
-	 * retries the accessibility bus forever under the emulator
-	 * (three X connects per process + a dbus SO_PEERCRED churn
-	 * loop that never completes) - disable it */
-	"NO_AT_BRIDGE=1",
-	/* glib's own dbus/auth/connection state trace to stderr (picked
-	 * up by the ERRWR probe) - the WM's SASL stops after the \0
-	 * byte and never sends the AUTH line */
-	"GDBUS_DEBUG=authentication,address,transport",
-	"G_MESSAGES_DEBUG=all",
-	nil,};
-
 /* epoll: a table of registered fds per epoll fd; wait reports every
  * registered fd ready (the single-threaded server then blocks in the
  * read that matters). */
@@ -464,18 +441,21 @@ buildstack(int nargs, char **args)
 	uchar *st;
 	ulong sp, strp;
 	ulong *vec;
-	ulong argv[16];
-	ulong enva[16];
+	ulong argv[Maxargs];
+	ulong enva[Maxenv];
 	int i, ne, naux, nvec;
 
-	if(nargs > 15)
-		nargs = 15;
+	if(nargs < 1 || nargs >= Maxargs)
+		fatal("too many arguments");
 	st = segat(Stackbase, Stacksize);
-	strp = Stackbase + Stacksize - 512;
+	/* Reserve the top page for the syscall thunk. */
+	strp = Stackbase + Stacksize - Pgsz;
 	for(i = nargs-1; i >= 0; i--){
 		int l;
 
 		l = strlen(args[i]) + 1;
+		if(l > strp-Stackbase-8192)
+			fatal("argument list too large");
 		strp -= l;
 		strcpy((char*)st + (strp - Stackbase), args[i]);
 		argv[i] = strp;
@@ -484,6 +464,8 @@ buildstack(int nargs, char **args)
 		int l;
 
 		l = strlen(genv[ne]) + 1;
+		if(ne >= Maxenv-1 || l > strp-Stackbase-8192)
+			fatal("environment too large");
 		strp -= l;
 		strcpy((char*)st + (strp - Stackbase), genv[ne]);
 		enva[ne] = strp;
@@ -2967,9 +2949,16 @@ sysexecve(char *path, char **gargv)
 	mapbump = Mapbase + Brksize + Pgsz;
 	entrypc = loadelf(fd, &eh, eh.type == EtDyn ? Piebase : 0);
 	mainentry = entrypc;
-	phdrva = eh.phoff;
-	if(eh.type == EtDyn)
-		phdrva += Piebase;
+	/* AT_PHDR is a mapped address, including for non-PIE programs.
+	 * Supplying the raw file offset made static libc fault at 0x34
+	 * immediately after execve. */
+	phdrva = 0;
+	for(i = 0; i < nph; i++)
+		if(ph[i].type == PtLoad && eh.phoff >= ph[i].offset &&
+		   eh.phoff < ph[i].offset+ph[i].filesz){
+			phdrva = ph[i].vaddr+eh.phoff-ph[i].offset;
+			break;
+		}
 	close(fd);
 	if(dynamic){
 		int ifd;
@@ -3006,6 +2995,7 @@ sysexecve(char *path, char **gargv)
 	/* the exec wiped the arena segment with the rest of the old
 	 * image; the new one starts brk/mmap from scratch and needs
 	 * it back */
+	brkcur = Brkbase;
 	segat(Mapbase, Mapsize);
 	stacktop = buildstack(countargs(gargv), gargv);
 	{
@@ -4015,6 +4005,10 @@ dosyscall(Ureg *ur)
 			static char *gargv[256];
 			static char argstr[8192];
 			static char pathbuf[256];
+			static char *nextenv[Maxenv];
+			static char envstr[2][Envbytes];
+			static int envslot;
+			static char *oldenv[Maxenv];
 			ulong *ap;
 			int na, j, k;
 
@@ -4035,13 +4029,24 @@ dosyscall(Ureg *ur)
 				k += m + 1;
 			}
 			gargv[na] = nil;
+			if((ap != nil && ap[na] != 0) ||
+			   copyguestenv((char**)a3, nextenv, envstr[envslot], Envbytes) < 0){
+				r = -7; /* E2BIG */
+				break;
+			}
 			if(a1 != 0){
 				strncpy(pathbuf, (char*)a1, sizeof pathbuf - 1);
 				pathbuf[sizeof pathbuf - 1] = 0;
 			}else
 				pathbuf[0] = 0;
+			memmove(oldenv, genv, sizeof oldenv);
+			memmove(genv, nextenv, sizeof nextenv);
 			r = sysexecve(pathbuf, gargv);
+			if(r != 0)
+				memmove(genv, oldenv, sizeof oldenv);
 			if(r == 0){
+				/* Keep the live host copy intact if the next exec fails. */
+				envslot ^= 1;
 				/* the handler adds 2 for the syscall insn we
 				 * replaced: pre-compensate so the guest
 				 * enters at the true entry, not entry+2 */
@@ -4456,7 +4461,18 @@ dosyscall(Ureg *ur)
 			r = 0;
 		break;
 	case 85:	/* readlink */
-		r = -Enoent;
+		/* Namespace files are not symbolic links.  realpath probes each
+		 * component with readlink and needs EINVAL for an existing path,
+		 * not ENOENT (which makes valid document paths disappear). */
+		r = access((char*)a1, AEXIST) < 0 ? -Enoent : -Einval;
+		break;
+	case 305:	/* readlinkat: absolute paths or AT_FDCWD */
+		if(a2 == 0)
+			r = -Efault;
+		else if(((char*)a2)[0] != '/' && a1 != 0xffffff9cUL)
+			r = -Ebadf;
+		else
+			r = access((char*)a2, AEXIST) < 0 ? -Enoent : -Einval;
 		break;
 	case 195:	/* stat64 */
 	case 196:	/* lstat64 */
@@ -5335,7 +5351,7 @@ mfd = open("/dev/mark", OWRITE);
 static void
 usage(void)
 {
-	fprint(2, "usage: linuxrun [-nv] prog\n");
+	fprint(2, "usage: linuxrun [-nv] [-e name=value] prog [args ...]\n");
 	exits("usage");
 }
 
@@ -5346,7 +5362,12 @@ main(int argc, char *argv[])
 	uchar hdr[64];
 	int fd, i;
 
+	initenv();
 	ARGBEGIN{
+	case 'e':
+		if(setguestenv(EARGF(usage())) < 0)
+			fatal("invalid or oversized environment entry");
+		break;
 	case 'n':
 		analyzeonly = 1;
 		break;

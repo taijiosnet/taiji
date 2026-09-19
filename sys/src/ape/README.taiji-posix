@@ -34,6 +34,8 @@ TIOCGWINSZ. The default compatibility terminal size is 80x24 until the active
 terminal can report dynamic geometry.
 
 For Linux binaries, use `linuxrun -n file` to inspect the ELF header and
-program-header load plan without trying to execute it. `linuxrun -s` runs the
-built-in ELF loader smoke fixture. Direct Linux ELF execution is not available
-yet; source ports through APE remain the supported compatibility path.
+program-header load plan without trying to execute it. `linuxrun file [args]`
+provides experimental i386 Linux ELF execution, separately from APE.
+`linuxrun -e NAME=value` supplies a guest environment entry. The native
+`linux-app` launcher integrates selected Debian X11 applications into the
+desktop; see /doc/unified-desktop.md for setup, checks, and limitations.

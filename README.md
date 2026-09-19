@@ -23,8 +23,26 @@ TaijiOS is the integration target for the Kryon application stack:
 - Pass provides stateless password generation.
 - Kryon provides the shared UI/runtime layer used by the applications.
 
-The default QEMU profile boots into this desktop stack, while the text
-profile stays available for low-level OS work.
+The default QEMU profile opens one Rill desktop immediately. Applications
+choose their runtime through their launcher; there is no startup flavor or
+namespace selection. The text profile stays available for low-level OS work.
+
+An experimental Linux application path puts Debian X11 applications in native
+windows alongside the desktop. The application menu includes Text Editor
+(`xedit`) and Eyes (`xeyes`). Native applications and these launchers share
+Documents and the desktop's text clipboard. This currently supports a small
+set of i386 X11 applications; Windows/Wine execution is not implemented.
+Native and supported Debian apps appear together in the taskbar, and Ctrl+Tab
+switches between them. Terminal, Files, and Settings use native windows; the
+panel and menus stay above apps. Debian application displays follow their
+native window size, `rill-open` opens documents through the application
+registry, and About opens as an ordinary window.
+See [the unified desktop notes](doc/unified-desktop.md) for setup, commands,
+tests, and current limits.
+The [current status and remaining plan](doc/unified-desktop-status.md) distinguish
+implemented features from verified behavior, including
+the [application matrix](doc/application-matrix.md) and the work still needed
+for Windows support.
 
 ## Boot Locally
 

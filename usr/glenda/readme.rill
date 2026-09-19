@@ -1,7 +1,10 @@
 Rill is the default TaijiOS desktop in this tree.
 
 Use the desktop menu or the Run command to open bundled programs.
-ktrem opens the terminal, and startwm starts Rill by default.
+ktrem opens the terminal, and startwm starts the unified Rill desktop.
+The taskbar switches between native and supported Debian applications.
+Terminal, Files, and Settings open in their own native windows.
 
-From a text prompt you can run startwm, rill, acme, or any other command
-normally.
+Native and supported Debian X11 applications share the desktop. From a text
+prompt, run startwm to enter it; individual programs such as acme can still
+be launched directly. See /doc/unified-desktop.md for the Linux app setup.

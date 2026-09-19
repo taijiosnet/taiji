@@ -1,26 +1,11 @@
 #!/bin/rc
 
-wm=rill
 if(! ~ $#* 0){
-	wm=$1
-	shift
-}
-
-switch($wm){
-case rill
-	if(test -x /bin/rill)
-		rill $*
-	if not {
-		echo 'startwm: /bin/rill not found' >[1=2]
-		exit notfound
-	}
-case acme
-	if(! test -x /bin/acme){
-		echo 'startwm: /bin/acme not found' >[1=2]
-		exit notfound
-	}
-	acme $*
-case *
-	echo 'usage: startwm [rill|acme] [args...]' >[1=2]
+	echo 'usage: startwm' >[1=2]
 	exit usage
 }
+if(! test -x /bin/rill || ! test -x /bin/rio9){
+	echo 'startwm: install /bin/rill and /bin/rio9' >[1=2]
+	exit notfound
+}
+exec rio9 -d rill

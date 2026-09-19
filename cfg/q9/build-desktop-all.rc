@@ -1,0 +1,24 @@
+#!/bin/rc
+# Rebuild the components changed by the desktop work: window server,
+# X bridge, rill, and the kernel's Ctrl+Tab rune table entry.
+cd /sys/src/cmd/rio9
+if(! mk install){
+    echo taiji-build-rio9-failed
+    exit failed
+}
+cd /sys/src/cmd/xbridge
+if(! mk install){
+    echo taiji-build-xbridge-failed
+    exit failed
+}
+cd /sys/src/cmd/rill
+if(! mk install){
+    echo taiji-build-rill-failed
+    exit failed
+}
+cd /sys/src/9/pc
+if(! mk install){
+    echo taiji-build-kernel-failed
+    exit failed
+}
+echo taiji-build-all-ok

@@ -4,7 +4,7 @@ Id=terminal
 Name=Terminal
 Comment=Terminal emulator
 Categories=System;Utility;
-Exec=host:ktrem
+Exec=window -m -dx 760 -dy 500 ktrem
 Icon=term
 X-Rill-Favorite=true
 
@@ -14,7 +14,7 @@ Id=files
 Name=Files
 Comment=File manager
 Categories=System;Utility;
-Exec=host:shelf
+Exec=window -m -dx 760 -dy 500 shelf
 Icon=folder
 X-Rill-Favorite=true
 
@@ -24,7 +24,7 @@ Id=inbe
 Name=Inner Breeze
 Comment=Breathing, meditation and habits
 Categories=Health;Utility;
-Exec=inbe
+Exec=window -m -dx 648 -dy 640 inbe
 Icon=inbe
 
 [Desktop Entry]
@@ -33,7 +33,7 @@ Id=pass
 Name=Pass
 Comment=Password generator
 Categories=Utility;Security;
-Exec=pass
+Exec=window -m -dx 488 -dy 448 pass
 Icon=pass
 
 [Desktop Entry]
@@ -42,9 +42,27 @@ Id=settings
 Name=Settings
 Comment=Desktop preferences
 Categories=Settings;System;
-Exec=internal:settings
+Exec=window -m -dx 548 -dy 448 rill --settings
 Icon=settings
 X-Rill-Favorite=true
+
+[Desktop Entry]
+Type=Application
+Id=text-editor
+Name=Text Editor
+Comment=Edit shared documents
+Categories=Utility;
+Exec=window -m -dx 648 -dy 516 linux-app -t 'Text Editor' xedit -geometry 640x480+0+0
+Icon=doc
+
+[Desktop Entry]
+Type=Application
+Id=eyes
+Name=Eyes
+Comment=Eyes that follow your pointer
+Categories=Games;
+Exec=window -m -dx 648 -dy 516 linux-app -t Eyes xeyes -geometry 640x480+0+0
+Icon=game
 
 [Desktop Entry]
 Type=Application
@@ -52,5 +70,5 @@ Id=about
 Name=About Rill
 Comment=Session information
 Categories=Utility;
-Exec=internal:about
+Exec=window -m -dx 500 -dy 460 rill --about
 Icon=about

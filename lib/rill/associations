@@ -1,0 +1,29 @@
+# Document associations for rill-open(1).
+# One rule per line: file-name suffix, whitespace, application id from
+# /lib/rill/applications.  Rules in $home/lib/rill/associations override.
+
+txt	text-editor
+md	text-editor
+markdown	text-editor
+text	text-editor
+c	text-editor
+h	text-editor
+py	text-editor
+pl	text-editor
+sh	text-editor
+rc	text-editor
+awk	text-editor
+mk	text-editor
+lua	text-editor
+js	text-editor
+css	text-editor
+html	text-editor
+htm	text-editor
+xml	text-editor
+json	text-editor
+tex	text-editor
+log	text-editor
+conf	text-editor
+ini	text-editor
+m	text-editor
+go	text-editor

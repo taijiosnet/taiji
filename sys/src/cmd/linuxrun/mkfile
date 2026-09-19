@@ -1,7 +1,8 @@
 </$objtype/mkfile
 
 TARG=linuxrun
-OFILES=linuxrun.$O
+OFILES=linuxrun.$O environment.$O
+HFILES=environment.h
 BIN=/$objtype/bin
 
 </sys/src/cmd/mkone

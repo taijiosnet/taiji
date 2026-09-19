@@ -394,6 +394,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 20px;
   padding: 24px clamp(18px, 4vw, 56px);
   color: var(--dim);

@@ -1,0 +1,7 @@
+#!/bin/rc
+cd /sys/src/9/pc
+if(! mk install){
+    echo taiji-fp-kernel-failed
+    exit failed
+}
+echo taiji-fp-kernel-built

@@ -3,6 +3,11 @@
 rfork en
 
 root=/debian/rootfs
+sharedhome=$home
+if(~ $#sharedhome 0)
+	sharedhome=/usr/glenda
+if(~ $namespace debian)
+	sharedhome=()
 
 fn fail {
 	echo 'debian-session: '^$* >[1=2]
@@ -25,6 +30,8 @@ ensure $root/env
 ensure $root/etc
 ensure $root/fd
 ensure $root/home
+ensure $root/home/user
+ensure $root/home/user/Documents
 ensure $root/lib
 ensure $root/mnt
 ensure $root/net
@@ -47,6 +54,14 @@ ensure $root/taiji
 ensure $root/taiji/bin
 ensure $root/taiji/ape
 ensure $root/taiji/ape/bin
+
+# One document store, visible from both native and Debian applications.
+# Bind only the user's Documents, not the whole native home or OS tree.
+if(! ~ $#sharedhome 0){
+	ensure $sharedhome/Documents
+	if(! bind -c $sharedhome/Documents $root/home/user/Documents)
+		fail 'cannot share Documents'
+}
 
 if(! bind /$cputype/bin $root/taiji/bin)
 	fail 'cannot bind TaijiOS binaries'
@@ -89,6 +104,7 @@ home=/root
 namespace=debian
 session=debian
 sysname=debian
+HOME=/home/user
 prompt=('root@debian# ' '	')
 path=(/bin /usr/bin /usr/local/bin /taiji/bin /taiji/ape/bin)
 
@@ -107,6 +123,5 @@ if(~ $1 -c){
 	exec /taiji/bin/rc -c $*
 }
 
-# With arguments, run them in the namespace (the session selector passes
-# the window manager here, e.g. debian-session rill).
+# Run the requested application in its Debian filesystem view.
 exec $*

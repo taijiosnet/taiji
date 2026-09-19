@@ -23,6 +23,7 @@ enum
 
 static	int		topped;
 static	int		id;
+extern Image *desktopimage;
 
 static	Image	*cols[NCOL];
 static	Image	*grey;
@@ -56,6 +57,7 @@ wmk(Image *i, Mousectl *mc, Channel *ck, Channel *cctl, int scrolling)
 		paleholdcol = allocimage(display, Rect(0,0,1,1), CMAP8, 1, DPalegreyblue);
 	}
 	w = emalloc(sizeof(Window));
+	w->desktop = i == desktopimage;
 	w->screenr = i->r;
 	r = insetrect(i->r, Selborder+1);
 	w->i = i;
@@ -93,7 +95,7 @@ wsetname(Window *w)
 	int i, n;
 	char err[ERRMAX];
 
-	n = sprint(w->name, "window.%d.%d", w->id, w->namecount++);
+	n = sprint(w->name, "%s.%d.%d", w->desktop ? "noborder" : "window", w->id, w->namecount++);
 	for(i='A'; i<='Z'; i++){
 		if(nameimage(w->i, w->name, 1) > 0)
 			return;
@@ -139,6 +141,9 @@ wresize(Window *w, Image *i, int move)
 	}
 	wborder(w, Selborder);
 	w->topped = ++topped;
+	if(w->desktop)
+		wbottomme(w);
+	woverlayraise();
 	w->resized = TRUE;
 	w->mouse.counter++;
 }
@@ -838,6 +843,8 @@ wplumb(Window *w)
 int
 winborder(Window *w, Point xy)
 {
+	if(w->desktop)
+		return 0;
 	return ptinrect(xy, w->screenr) && !ptinrect(xy, insetrect(w->screenr, Selborder));
 }
 
@@ -1148,7 +1155,7 @@ wborder(Window *w, int type)
 {
 	Image *col;
 
-	if(w->i == nil)
+	if(w->i == nil || w->desktop)
 		return;
 	if(w->holding){
 		if(type == Selborder)
@@ -1171,7 +1178,9 @@ wpointto(Point pt)
 	int i;
 	Window *v, *w;
 
-	w = nil;
+	w = woverlaypoint(pt);
+	if(w != nil)
+		return w;
 	for(i=0; i<nwindow; i++){
 		v = window[i];
 		if(ptinrect(pt, v->screenr))
@@ -1180,6 +1189,40 @@ wpointto(Point pt)
 			w = v;
 	}
 	return w;
+}
+
+static int activateid;
+
+void
+wactivatepending(void)
+{
+	Window *w;
+	int id, j;
+
+	if(mouse->buttons || activateid == 0)
+		return;
+	id = activateid;
+	activateid = 0;
+	w = wlookid(id);
+	if(w == nil || w->deleted || w->i == nil || w->desktop)
+		return;
+	for(j=0; j<nhidden; j++)
+		if(hidden[j] == w){
+			/* Reshaped makes the restored window current. */
+			wunhide(j);
+			return;
+		}
+	wtopme(w);
+	wcurrent(w);
+	flushimage(display, 1);
+}
+
+void
+wactivate(int id)
+{
+	/* Keep an id, not a pointer: the target may close before release. */
+	activateid = id;
+	wactivatepending();
 }
 
 void
@@ -1242,10 +1285,15 @@ wtop(Point pt)
 
 	w = wpointto(pt);
 	if(w){
+		if(w->desktop){
+			wcurrent(w);
+			return nil;
+		}
 		if(w->topped == topped)
 			return nil;
 		topwindow(w->i);
 		wcurrent(w);
+		woverlayraise();
 		flushimage(display, 1);
 		w->topped = ++topped;
 	}
@@ -1255,8 +1303,9 @@ wtop(Point pt)
 void
 wtopme(Window *w)
 {
-	if(w!=nil && w->i!=nil && !w->deleted && w->topped!=topped){
+	if(w!=nil && !w->desktop && w->i!=nil && !w->deleted && w->topped!=topped){
 		topwindow(w->i);
+		woverlayraise();
 		flushimage(display, 1);
 		w->topped = ++ topped;
 	}
@@ -1265,10 +1314,22 @@ wtopme(Window *w)
 void
 wbottomme(Window *w)
 {
+	int i;
+	Window *desktop;
+
 	if(w!=nil && w->i!=nil && !w->deleted){
 		bottomwindow(w->i);
-		flushimage(display, 1);
 		w->topped = - ++topped;
+		/* Lowering an application must never put it behind the desktop. */
+		if(!w->desktop)
+			for(i = 0; i < nwindow; i++){
+				desktop = window[i];
+				if(desktop->desktop && desktop->i != nil && !desktop->deleted){
+					bottomwindow(desktop->i);
+					desktop->topped = - ++topped;
+				}
+			}
+		flushimage(display, 1);
 	}
 }
 
@@ -1289,6 +1350,7 @@ wclosewin(Window *w)
 	Rectangle r;
 	int i;
 
+	woverlayclear(w);
 	w->deleted = TRUE;
 	if(w == input){
 		input = nil;

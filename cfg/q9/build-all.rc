@@ -1,0 +1,6 @@
+#!/bin/rc
+cd /sys/src/cmd/linuxrun
+mk install || echo linuxrun-build-failed
+mk clean
+cd /
+echo lr-build-done

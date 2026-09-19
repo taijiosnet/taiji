@@ -1,0 +1,55 @@
+#!/bin/rc
+fn fail {
+	cat /tmp/unified-xvfb.log /tmp/unified-xeyes.log >[2]/dev/null
+	if(! ~ $#doc 0)
+		rm -f $doc
+	echo taiji-unified-failed: $*
+	exit failed
+}
+cd /sys/src/cmd/linuxrun
+mk install || fail linuxrun-build
+cd /sys/src/cmd/xbridge
+mk install || fail xbridge-build
+cd /sys/src/cmd/rio9
+mk install || fail window-server-build
+
+rfork n
+ramfs
+bind -c /tmp /debian/rootfs/tmp || fail temporary-files
+mkdir -p /debian/rootfs/tmp/unified-test
+cp /sys/src/cmd/linuxrun/test/busybox.elf /debian/rootfs/tmp/unified-test/busybox
+debian-session /taiji/bin/linuxrun -e 'DISPLAY=:77' /tmp/unified-test/busybox sh -c 'echo "$DISPLAY"; DISPLAY=:88; export DISPLAY; exec /tmp/unified-test/busybox sh -c ''echo "$DISPLAY"''' >/tmp/unified-env
+environment=`{cat /tmp/unified-env}
+if(! ~ $"environment ':77 :88')
+	fail environment
+echo taiji-unified-environment-ok
+
+mkdir -p /usr/glenda/Documents
+doc=/usr/glenda/Documents/unified-test-$pid.txt
+echo native-document >$doc
+debian-session /taiji/bin/linuxrun /tmp/unified-test/busybox cat /home/user/Documents/unified-test-$pid.txt >/tmp/unified-doc
+if(! ~ `{cat /tmp/unified-doc} native-document)
+	fail documents
+debian-session /taiji/bin/linuxrun /tmp/unified-test/busybox realpath /home/user/Documents/unified-test-$pid.txt >/tmp/unified-realpath
+if(! ~ `{cat /tmp/unified-realpath} /home/user/Documents/unified-test-$pid.txt)
+	fail document-path
+debian-session /taiji/bin/linuxrun /tmp/unified-test/busybox sh -c 'echo linux-document > "$1"' sh /home/user/Documents/unified-test-$pid.txt
+if(! ~ `{cat $doc} linux-document)
+	fail document-save
+rm -f $doc
+doc=()
+echo taiji-unified-documents-ok
+
+debian-session /taiji/bin/linuxrun /usr/bin/Xvfb :77 -screen 0 640x480x24 -nolisten tcp -extension GLX >/tmp/unified-xvfb.log >[2=1] &
+server=$apid
+sleep 8
+debian-session /taiji/bin/linuxrun -e 'DISPLAY=:77' /usr/bin/xeyes -geometry 240x160+40+40 >/tmp/unified-xeyes.log >[2=1] &
+app=$apid
+sleep 8
+xbridge -s /usr/glenda/tmp/unified-screen.ppm /debian/rootfs/tmp/.X11-unix/X77 || fail bridge
+xbridge -T /debian/rootfs/tmp/.X11-unix/X77 || fail input-clipboard
+echo taiji-unified-display-ok
+if(test -e /proc/$app/ctl)
+	echo kill >/proc/$app/ctl
+echo kill >/proc/$server/ctl
+echo taiji-unified-smoke-ok

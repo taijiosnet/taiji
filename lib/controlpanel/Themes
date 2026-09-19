@@ -1,7 +1,2 @@
 #!/bin/rc
-if(test -x /bin/q9themes)
-	exec q9themes
-echo Control Panel - Themes
-echo
-echo Install q9themes into /386/bin first.
-rc -i
+exec window -m -dx 540 -dy 440 rill --settings

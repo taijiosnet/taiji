@@ -738,6 +738,17 @@ xfidread(Xfid *x)
 		t = estrdup(buf);
 		goto Text;
 
+	case Qwinfo:
+		/* A snapshot must not consume the application's wctl events. */
+		n = snprint(buf, sizeof buf, "%d %d %d %d %s %s %s\n",
+			w->screenr.min.x, w->screenr.min.y,
+			w->screenr.max.x, w->screenr.max.y,
+			w == input ? "current" : "notcurrent",
+			Dx(w->screenr) > 0 ? "visible" : "hidden",
+			w->desktop ? "desktop" : "window");
+		t = estrdup(buf);
+		goto Text;
+
 
 	case Qwinname:
 		n = strlen(w->name);

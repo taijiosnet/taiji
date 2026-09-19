@@ -360,9 +360,11 @@ write_predesktoprc()
 			printf 'echo q9: checking pass\n'
 			printf 'cd /sys/src/pass\n'
 			printf 'mk install\n'
-			printf 'echo q9: checking namespace selector\n'
-			printf 'cd /sys/src/cmd\n'
-			printf 'mk nsselect.install\n'
+			for component in rio9 linuxrun xbridge; do
+				printf 'echo q9: checking %s\n' "$component"
+				printf 'cd /sys/src/cmd/%s\n' "$component"
+				printf 'mk install\n'
+			done
 			printf 'echo q9: checking rill\n'
 			printf 'cd /sys/src/cmd/rill\n'
 			printf 'mk install\n'

@@ -41,12 +41,15 @@ must test -x /386/bin/rill
 must test -x /386/bin/shelf
 must test -x /386/bin/inbe
 must test -x /386/bin/pass
-must test -x /386/bin/nsselect
 must test -x /386/bin/rio9
+must test -x /386/bin/linuxrun
+must test -x /386/bin/xbridge
+must test -x /rc/bin/linux-app
+must test -x /rc/bin/rill-open
+must test -r /lib/rill/associations
 must test -x /386/bin/explorer
-must test -x /386/bin/q9display
 must test -x /386/bin/q9taskmgr
-must test -x /386/bin/q9themes
+must test -x /386/bin/rio
 
 if(~ $fail 0)
 	echo driver-smoke-ok

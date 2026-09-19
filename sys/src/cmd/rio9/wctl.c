@@ -24,6 +24,7 @@ enum
 	Scroll,
 	Noscroll,
 	Set,
+	Activate,
 	Top,
 	Bottom,
 	Current,
@@ -39,6 +40,7 @@ static char *cmds[] = {
 	[Scroll]	= "scroll",
 	[Noscroll]	= "noscroll",
 	[Set]		= "set",
+	[Activate]	= "activate",
 	[Top]	= "top",
 	[Bottom]	= "bottom",
 	[Current]	= "current",
@@ -357,6 +359,9 @@ writewctl(Xfid *x, char *err)
 	w = x->f->w;
 	cnt = x->count;
 	x->data[cnt] = '\0';
+	if(strncmp(x->data, "overlay", 7) == 0 &&
+	   (x->data[7] == 0 || isspace(x->data[7])))
+		return woverlay(w, x->data+7, err);
 	id = 0;
 
 	rect = rectsubpt(w->screenr, screen->r.min);
@@ -390,6 +395,10 @@ writewctl(Xfid *x, char *err)
 	case Set:
 		if(pid > 0)
 			wsetpid(w, pid, 0);
+		return 1;
+	case Activate:
+		/* Taskbar clicks complete before focus leaves the desktop. */
+		wactivate(w->id);
 		return 1;
 	case Move:
 		rect = Rect(rect.min.x, rect.min.y, rect.min.x+Dx(w->screenr), rect.min.y+Dy(w->screenr));
