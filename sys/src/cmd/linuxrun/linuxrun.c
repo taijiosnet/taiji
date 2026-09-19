@@ -4263,6 +4263,11 @@ dosyscall(Ureg *ur)
 				 * is re-attached below, the low segment on
 				 * demand */
 				lowseg = 0;
+				/* this post-rfork context can attach (it is
+				 * where registernotestack succeeds), unlike
+				 * note context; wine's clone children run
+				 * low-address code immediately */
+				ensurelow();
 				if(forkready[0] >= 0)
 					close(forkready[0]);
 				/* the note-stack segment came along COW: just

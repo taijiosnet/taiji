@@ -126,6 +126,19 @@ With that in place, Wine's own dispatcher services the `hlt` thunk, and
 notepad can proceed toward a mapped window. `FAULTCODE` and the corrected
 full-log probe (`cat`, not `tail`) stay in the tree as the instruments.
 
+
+## Round 12 (2026-09-19): clone children keep low memory; next fault isolated
+
+Clone/fork children now re-attach the opt-in low segment in the post-rfork
+context (where registernotestack and atnotify already succeed).  The
+display probe's frontier fault is unchanged and now precisely placed: a
+guest-stack read at 0x6001d874 from a pc inside linuxrun's own early child
+path, occurring before the child registers its note handlers - which is why
+FAULTCODE cannot observe it.  The next investigation is that pre-atnotify
+window of the exec/clone child (argument copying, fork snapshot, or the
+child resume itself touching guest memory whose segment attach ordering
+has changed).
+
 ## Architecture decision to make next
 
 Run Wine directly under `linuxrun` (one translation layer, best
