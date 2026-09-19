@@ -394,11 +394,59 @@ segat(ulong va, ulong len)
 	return p;
 }
 
+/* is this guest range actually mapped in this process?  native calls
+ * that take guest pointers must check, or a stale pointer kills the
+ * whole translation process with an unattributable fault note */
+static int
+guestok(ulong addr, ulong len)
+{
+	int i;
+
+	for(i = 0; i < nguestsegs; i++)
+		if(guestsegs[i][0] <= addr && addr+len <= guestsegs[i][0]+guestsegs[i][1])
+			return 1;
+	return 0;
+}
+
+static void
+guestprobe(char *site, ulong addr, ulong len)
+{
+	static int zg;
+
+	if(!guestok(addr, len) && zg++ < 20)
+		fprint(2, "linuxrun: GUESTPTR p%d %s %#lux +%lux UNMAPPED\n",
+			getpid(), site, addr, len);
+}
+
+
+/* back a clone thread's stack on demand: Wine creates threads with
+ * stacks anywhere in its reserved area (seen at 0xdfff0000), outside
+ * every segment; without backing, the child's first stack access
+ * kills the process.  Called from the post-rfork context, which can
+ * attach. */
+static void
+ensurestack(ulong sp)
+{
+	ulong base;
+	int i;
+
+	if(sp < 0x10000)
+		return;
+	for(i = 0; i < nguestsegs; i++)
+		if(guestsegs[i][0] <= sp && sp < guestsegs[i][0]+guestsegs[i][1])
+			return;
+	base = (sp - 256*1024) & ~(Pgsz-1);
+	segat(base, 512*1024);
+	if(verbose)
+		fprint(2, "linuxrun: thread stack %#lux backed at %#lux\n", sp, base);
+}
+
 static int
 readat(int fd, void *buf, long n, vlong off)
 {
 	if(seek(fd, off, 0) < 0)
 		return -1;
+	guestprobe("readat", (ulong)buf, n);
 	return readn(fd, buf, n);
 }
 
@@ -4294,6 +4342,9 @@ dosyscall(Ureg *ur)
 						getpid(), guestprocid);
 				}
 				if(nr == 120 && a4 != 0){
+					/* thread switch: back the requested
+					 * stack before the child runs on it */
+					ensurestack(a2);
 					long rr;
 
 					rr = syssetthreadarea(a4);	/* CLONE_SETTLS:
