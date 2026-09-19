@@ -1,0 +1,61 @@
+#!/bin/rc
+# Measure what happens when Wine runs through linuxrun: the Track 4
+# prototype step.  Any result here is progress: loader diagnostics,
+# syscall gaps, or (eventually) a running notepad.  Debian ships the
+# loader as /usr/lib/wine/wine; /usr/bin/wine* are shell apploaders.
+if(! test -x /debian/rootfs/usr/lib/wine/wine){
+	echo taiji-wine-missing
+	exit missing
+}
+cd /sys/src/cmd/linuxrun
+if(! mk install){
+	echo taiji-wine-linuxrun-build-failed
+	exit failed
+}
+echo taiji-wine-linuxrun-rebuilt
+if(! test -x /debian/rootfs/usr/lib/wine/wine){
+	echo taiji-wine-missing
+	exit missing
+}
+# Keep Wine's prefix and sockets in a private temporary tree.
+rfork n
+ramfs
+bind -c /tmp /debian/rootfs/tmp
+debian-session /taiji/bin/linuxrun -e 'WINEDEBUG=-all' -e 'HOME=/home/user' /usr/lib/wine/wine --version >/tmp/wine-version.log >[2=1] &
+wpid=$apid
+for(i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20){
+	if(test -s /tmp/wine-version.log)
+		break
+	if(! test -e /proc/$wpid)
+		break
+	sleep 1
+}
+sleep 2
+echo '--- wine --version output ---'
+cat /tmp/wine-version.log
+if(test -e /proc/$wpid/ctl)
+	echo kill >/proc/$wpid/ctl
+sleep 1
+# The heavier test: start the builtin notepad.  Without a display it will
+# stop at the X connection; everything before that line is measurement.
+debian-session /taiji/bin/linuxrun -e 'WINEDEBUG=-all' -e 'HOME=/home/user' -e 'DISPLAY=:61' /usr/lib/wine/wine notepad >/tmp/wineboot.log >[2=1] &
+bpid=$apid
+for(i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30){
+	if(test -s /tmp/wineboot.log)
+		break
+	if(! test -e /proc/$bpid)
+		break
+	sleep 1
+}
+sleep 5
+echo '--- wine notepad output (first 60 lines) ---'
+sed -n '1,60p' /tmp/wineboot.log
+echo '--- notepad alive? ---'
+if(test -e /proc/$bpid/ctl){
+	echo kill >/proc/$bpid/ctl
+	echo wine-still-running
+}
+if not
+	echo wine-exited
+echo taiji-wine-probe-done
+

@@ -1060,6 +1060,37 @@ fillstat64(ulong addr, int fd)
 	return 0;
 }
 
+/* fill an i386 struct statx so modern glibc and wine callers see
+ * basic stats; they only need mask/mode/size/ino for existence probes */
+static long
+fillstatx(ulong addr, int fd)
+{
+	uchar *b;
+	Dir *d;
+	ulong mode;
+
+	if(addr == 0)
+		return 0;
+	d = dirfstat(fd);
+	if(d == nil)
+		return -Ebadf;
+	b = (uchar*)addr;
+	memset(b, 0, 256);
+	if(d->mode & DMDIR)
+		mode = 0x41ed;			/* S_IFDIR|0755 */
+	else
+		mode = (d->mode & 0111) ? 0x81ed : 0x81a4;
+	*(ulong*)(b+0) = 0x7ff;		/* stx_mask: STATX_BASIC_STATS */
+	*(ulong*)(b+4) = 4096;		/* stx_blksize */
+	*(ulong*)(b+16) = 1;		/* stx_nlink */
+	*(ushort*)(b+28) = mode;	/* stx_mode */
+	*(vlong*)(b+32) = d->qid.path;	/* stx_ino */
+	*(vlong*)(b+40) = d->length;	/* stx_size */
+	*(vlong*)(b+48) = (d->length+511)/512;	/* stx_blocks */
+	free(d);
+	return 0;
+}
+
 /* Linux i386 struct user_desc */
 typedef struct Userdesc Userdesc;
 struct Userdesc {
@@ -4485,6 +4516,35 @@ dosyscall(Ureg *ur)
 			else{
 				r = fillstat64(a2, sfd);
 				close(sfd);
+			}
+		}
+		break;
+	case 383:	/* statx: absolute, AT_FDCWD, dirfd-relative, or AT_EMPTY_PATH */
+		{
+			char full[1024];
+			int sfd;
+
+			full[0] = 0;
+			r = -Ebadf;
+			if(a2 == 0 || a5 == 0)
+				r = -Efault;
+			else if(((char*)a2)[0] == 0 && (a3 & 0x1000) && a1 < 1024)
+				r = fillstatx(a5, (int)a1);
+			else if(((char*)a2)[0] == '/' || a1 == 0xffffff9cUL){
+				strncpy(full, (char*)a2, sizeof full-1);
+				full[sizeof full-1] = 0;
+			}
+			else if(a1 < 1024)
+				snprint(full, sizeof full, "/proc/%d/fd/%lud/%s",
+					getpid(), a1, (char*)a2);
+			if(full[0]){
+				sfd = open(full, OREAD);
+				if(sfd < 0)
+					r = -Enoent;
+				else{
+					r = fillstatx(a5, sfd);
+					close(sfd);
+				}
 			}
 		}
 		break;

@@ -27,18 +27,34 @@ Requirements:
 | Fonts | corefonts or Wine's builtin fonts | some DejaVu fonts present; corefonts absent |
 | Filesystem | `Z:` mapping or `$HOME` bind to share Documents | `debian-session` already provides `/home/user` ↔ `$home/Documents` |
 
-## Measured blockers (as of 2026-09-19)
+## Measured blockers (updated 2026-09-19, second measurement round)
 
-1. The Debian runtime at `/debian/rootfs` contains no Wine packages;
-   installing them requires package downloads, which in turn requires the
-   syscall layer to carry a full TLS/HTTP client workload (apt). Socket
-   translation exists (the D-Bus bridge work), but apt has not been
-   exercised; that is the next measurement to make.
-2. Wine's threading (NPTL futexes, TLS, `vfork` semantics) is heavier than
-   any binary currently running under `linuxrun`; the futex work landed
-   for D-Bus but Wine stresses it far more broadly.
-3. Audio is unimplemented everywhere, so the first target must tolerate
-   its absence (notepad does).
+The Wine package set is now **installed**: `scripts/fetch-wine.sh` stages
+Debian bookworm's i386 `wine`, `wine32`, and `libwine` closure (115
+packages) into `/debian/rootfs` the same way `fetch-xfce.sh` does. The
+probe `cfg/q9/wine-measure.rc` runs Wine through `linuxrun` and captures
+the result. Measured progress so far:
+
+| Stage | Result |
+| --- | --- |
+| Wine ELF loads through `linuxrun` | works |
+| `ld.so` dependency search (`openat`, `statx` probes) | works after this round's fixes |
+| `libc.so.6` and `libwine` load | works |
+| Wine's own `ntdll.so` load | **fails**: `wine: could not load ntdll.so: (null)` |
+
+Syscall work landed from the first measurement: `statx` (i386 nr 383) is
+now implemented — absolute paths, `AT_FDCWD`, dirfd-relative through
+`/proc/pid/fd`, and `AT_EMPTY_PATH` (flags are the third argument, which
+the first cut got wrong; the correction is what let ld.so finish).
+
+The remaining blocker is the deepest one: Wine's loader dlopens
+`i386-unix/ntdll.so`, which needs glibc's dynamic-loader TLS machinery
+(TLS descriptors, `dl_iterate_phdr`, early TLS setup) that the translated
+runtime does not yet provide. That is the next implementation target on
+the Wine path; it is loader work in `linuxrun`, not a packaging problem.
+
+Audio remains unimplemented everywhere, so the first target must tolerate
+its absence (notepad does).
 
 ## Architecture decision to make next
 
