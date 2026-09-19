@@ -169,6 +169,17 @@ debugging: break on sysrfork with the wine probe running and inspect the
 note/ureg state referencing guest addresses.
 
 
+
+## Round 19 (2026-09-19): the preloader lead resolved
+
+The wine display probe's trace shows the notepad child exec
+/usr/lib/wine/wine-preloader failing before it execs /usr/lib/wine/wine
+directly.  Verified against the actual bookworm wine32 package contents:
+**the preloader is absent by design** - Debian ships only wine,
+wineapploader, and wineserver32 - so that exec failure is normal Wine
+behavior, not a staging gap.  The frontier remains the rfork fault after
+the direct wine exec, as documented in round 18.
+
 ## Architecture decision to make next
 
 Run Wine directly under `linuxrun` (one translation layer, best
