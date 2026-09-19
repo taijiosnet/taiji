@@ -131,6 +131,16 @@ ulong tlsselector = 0x33;
  * reads back kernel/host pointers and jumps to them. */
 static ulong notestackva;
 
+/* Linux i386 signal state: Wine registers SIGSEGV handlers through
+ * rt_sigaction and dispatches its i386 unix thunks (deliberate `hlt`
+ * privileged faults) from them.  Without delivery, every thunk dies. */
+static ulong sighandler[65];
+static ulong sigrestorer[65];
+static int sigreturning;
+static ulong sigret_pc, sigret_sp, sigret_ax, sigret_bp, sigret_bx,
+	sigret_cx, sigret_dx, sigret_si, sigret_di;
+
+
 static ulong
 registernotestack(void)
 {
@@ -184,6 +194,67 @@ int initedtls;
 
 ulong guestsegs[16][2];
 int nguestsegs;
+
+/* Deliver signo to the guest handler by building an i386 rt_sigframe:
+ *   +0   pretcode (doubles as the handler's return address)
+ *   +4   sig, +8 pinfo, +12 puc  (the handler's stack arguments)
+ *   +16  siginfo (128 bytes)
+ *   +144 ucontext: uc_flags/link/stack(12), sigcontext at +164,
+ *        uc_sigmask after the sigcontext
+ *   +264 retcode: popl %eax; movl $173,%eax; int $0x80
+ * Returns 1 when the ureg now resumes in the handler. */
+static int
+deliversignal(int signo, Ureg *ur, ulong sicode, ulong siaddr)
+{
+	uchar *f;
+	ulong sp;
+	int i;
+
+	if(!started || signo < 1 || signo > 64)
+		return 0;
+	if(sighandler[signo] == 0 || sighandler[signo] == 1)
+		return 0;
+	if(ur->sp < 0x10000 || ur->sp > 0x7f000000)
+		return 0;
+	sp = (ur->sp - 8 - 288) & ~7;
+	f = (uchar*)sp;
+	for(i = 0; i < nguestsegs; i++)
+		if(guestsegs[i][0] <= sp && sp+288 <= guestsegs[i][0]+guestsegs[i][1])
+			break;
+	if(i >= nguestsegs)
+		return 0;
+	memset(f, 0, 288);
+	*(ulong*)(f+0) = sp + 264;		/* pretcode */
+	*(ulong*)(f+4) = signo;
+	*(ulong*)(f+8) = sp + 16;		/* pinfo */
+	*(ulong*)(f+12) = sp + 144;		/* puc */
+	*(ulong*)(f+16) = signo;		/* si_signo */
+	*(ulong*)(f+20) = 0;			/* si_errno */
+	*(ulong*)(f+24) = sicode;		/* si_code */
+	*(ulong*)(f+28) = siaddr;		/* si_addr */
+	/* sigcontext (uc_mcontext) at +164 */
+	*(ulong*)(f+164+16) = ur->di;
+	*(ulong*)(f+164+20) = ur->si;
+	*(ulong*)(f+164+24) = ur->bp;
+	*(ulong*)(f+164+28) = ur->sp;
+	*(ulong*)(f+164+32) = ur->bx;
+	*(ulong*)(f+164+36) = ur->dx;
+	*(ulong*)(f+164+40) = ur->cx;
+	*(ulong*)(f+164+44) = ur->ax;
+	*(ulong*)(f+164+48) = 13;		/* trapno: #GP */
+	*(ulong*)(f+164+52) = 0;		/* err */
+	*(ulong*)(f+164+56) = ur->pc;		/* ip */
+	*(ulong*)(f+164+64) = 0x200;		/* eflags: IF */
+	*(ulong*)(f+164+68) = ur->sp;		/* sp at signal */
+	f[264] = 0x58;				/* popl %eax */
+	f[265] = 0xb8;				/* movl $173,%eax */
+	*(ulong*)(f+266) = 173;
+	f[270] = 0xcd; f[271] = 0x80;		/* int $0x80 */
+	ur->pc = sighandler[signo];
+	ur->sp = sp;
+	ur->ax = 0;
+	return 1;
+}
 
 /* The guest-visible process id.  Every clone thread is a separate host
  * process with its own host pid, but threads share the guest image and
@@ -3623,10 +3694,56 @@ dosyscall(Ureg *ur)
 	case 125:	/* mprotect */
 	case 219:	/* madvise */
 	case 172:	/* prctl */
-	case 174:	/* rt_sigaction */
 	case 175:	/* rt_sigprocmask */
 	case 238:	/* sendfile: not yet */
 		r = 0;
+		break;
+	case 174:	/* rt_sigaction: record the guest's handlers */
+		{
+			static int zsa;
+
+			if(a1 == 0 || a1 > 64)
+				r = -Einval;
+			else{
+				if(a2 != 0){
+					sighandler[a1] = ((ulong*)a2)[0];
+					sigrestorer[a1] = ((ulong*)a2)[2];
+					if(zsa++ < 30)
+						fprint(2, "linuxrun: SIGACTION p%d %lud handler=%lux\n",
+							getpid(), a1, sighandler[a1]);
+				}
+				if(a3 != 0){
+					((ulong*)a3)[0] = sighandler[a1];
+					((ulong*)a3)[1] = 0;
+					((ulong*)a3)[2] = sigrestorer[a1];
+				}
+				r = 0;
+			}
+		}
+		break;
+	case 173:	/* rt_sigreturn: restore the saved context */
+		{
+			uchar *f;
+
+			f = (uchar*)(ur->sp - 4);
+			if(f != nil && ur->sp > 0x10000 && ur->sp < 0x7f000000){
+				ulong sc;
+
+				sc = (ulong)f + 144 + 20;
+				sigret_di = *(ulong*)(sc+16);
+				sigret_si = *(ulong*)(sc+20);
+				sigret_bp = *(ulong*)(sc+24);
+				sigret_sp = *(ulong*)(sc+28);
+				sigret_bx = *(ulong*)(sc+32);
+				sigret_dx = *(ulong*)(sc+36);
+				sigret_cx = *(ulong*)(sc+40);
+				sigret_ax = *(ulong*)(sc+44);
+				sigret_pc = *(ulong*)(sc+56);
+				sigreturning = 1;
+				r = 0;
+			}else
+				r = -Efault;
+		}
 		break;
 	case 163:	/* mremap: MAYMOVE semantics - copy to a new range */
 		{
@@ -5205,6 +5322,18 @@ traphandler(void *v, char *msg)
 
 		if(z++ < 20)
 			fprint(2, "linuxrun: note: %s\n", msg);
+		/* Trap faults go to the guest's SIGSEGV handler when it has
+		 * one: Wine's i386 unix thunks are deliberate `hlt` faults
+		 * dispatched exactly this way on Linux. */
+		if(started && strstr(msg, "trap:") != nil &&
+		   deliversignal(11, ur, 0x80, ur->pc)){
+			static int zs;
+
+			if(zs++ < 20)
+				fprint(2, "linuxrun: SIGSEGV delivered pc=%lux handler=%lux\n",
+					ur->pc, sighandler[11]);
+			return 1;
+		}
 		/* Crashes inside the guest image need their instruction
 		 * named: dump the bytes around the faulting pc before the
 		 * default disposition takes the process. */
@@ -5494,6 +5623,20 @@ traphandler(void *v, char *msg)
 	ur->pc += 2;
 	if(tlsfsokay)
 		ur->fs = tlsselector;
+	if(sigreturning){
+		/* rt_sigreturn: the frame's context wins, including a
+		 * redirected pc when the handler dispatched a thunk */
+		sigreturning = 0;
+		ur->pc = sigret_pc;
+		ur->sp = sigret_sp;
+		ur->ax = sigret_ax;
+		ur->bx = sigret_bx;
+		ur->cx = sigret_cx;
+		ur->dx = sigret_dx;
+		ur->si = sigret_si;
+		ur->di = sigret_di;
+		ur->bp = sigret_bp;
+	}
 	alarm(2000);
 	return 1;
 }
