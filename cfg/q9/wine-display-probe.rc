@@ -1,0 +1,49 @@
+#!/bin/rc
+# Wine notepad against a live Xvfb display: the end-to-end Track 4 probe.
+# If notepad maps a window, the xbridge snapshot of the X screen shows it.
+if(! test -x /debian/rootfs/usr/lib/wine/wine){
+	echo taiji-wine-missing
+	exit missing
+}
+cd /sys/src/cmd/linuxrun
+if(! mk install){
+	echo taiji-wine-linuxrun-build-failed
+	exit failed
+}
+rfork n
+ramfs
+bind -c /tmp /debian/rootfs/tmp
+mkdir -p /debian/rootfs/tmp/.X11-unix
+debian-session /taiji/bin/linuxrun /usr/bin/Xvfb :61 -screen 0 640x480x24 -nolisten tcp -extension GLX >/tmp/wine-xvfb.log >[2=1] &
+server=$apid
+ready=no
+for(i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20){
+	if(test -e /debian/rootfs/tmp/.X11-unix/X61^.req)
+		ready=yes
+	if not
+		sleep 1
+}
+if(~ $ready no){
+	echo taiji-wine-xvfb-failed
+	cat /tmp/wine-xvfb.log
+	if(test -e /proc/$server/ctl)
+		echo kill >/proc/$server/ctl
+	exit failed
+}
+echo taiji-wine-xvfb-ready
+debian-session /taiji/bin/linuxrun -e 'WINEDEBUG=-all' -e 'HOME=/home/user' -e 'DISPLAY=:61' /usr/lib/wine/wine notepad >/tmp/wine-notepad.log >[2=1] &
+npid=$apid
+for(i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30)
+	sleep 1
+xbridge -s /usr/glenda/tmp/wine-notepad.ppm /debian/rootfs/tmp/.X11-unix/X61
+echo '--- notepad log tail ---'
+tail -20 /tmp/wine-notepad.log
+if(test -e /proc/$npid/ctl){
+	echo kill >/proc/$npid/ctl
+	echo wine-notepad-alive
+}
+if not
+	echo wine-notepad-exited
+if(test -e /proc/$server/ctl)
+	echo kill >/proc/$server/ctl
+echo taiji-wine-display-probe-done

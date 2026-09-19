@@ -42,7 +42,7 @@ the result. Measured progress so far:
 | `libc.so.6` and `libwine` load | works |
 | Wine locates itself (`realpath` of `/proc/self/exe`) and loads `ntdll.so` | works |
 | `wine --version` | **works**: prints `wine-8.0 (Debian 8.0~repack-4)` |
-| `wine notepad` startup | **process stays alive** through the probe window; reaching a mapped window still needs the display path and wineserver verification |
+| `wine notepad` startup | **process stays alive**; the probe with a live Xvfb display (`cfg/q9/wine-display-probe.rc`) shows Wine proceeding into PE initialization — a child thread then faults with a general-protection violation at `pc=0x4082531a` inside Wine's address space, before notepad maps a window (the captured X screen stays black) |
 
 Syscall and runtime work landed from these measurements:
 
@@ -57,10 +57,13 @@ Syscall and runtime work landed from these measurements:
   and `realpath` probes every component.
 - `faccessat` (307) and `faccessat2` (439) are implemented.
 
-The next targets on the Wine path, in order: give the probe a live Xvfb
-display so notepad can map a window, verify wineserver's socket protocol
-under the translated syscalls, and then wire a Windows launcher through
-`linux-app` following the Text Editor pattern.
+The next targets on the Wine path, in order: decode the faulting
+instruction behind the general-protection violation (add a code-bytes
+dump at the fault pc to linuxrun's crash report; the fault is likely a
+segment-register or privileged operation Wine's thread setup uses that
+needs emulation), then give notepad a path to map a window, verify
+wineserver's socket protocol under the translated syscalls, and wire a
+Windows launcher through `linux-app` following the Text Editor pattern.
 
 ## Architecture decision to make next
 

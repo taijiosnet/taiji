@@ -5194,6 +5194,28 @@ traphandler(void *v, char *msg)
 
 		if(z++ < 20)
 			fprint(2, "linuxrun: note: %s\n", msg);
+		/* Crashes inside the guest image need their instruction
+		 * named: dump the bytes around the faulting pc before the
+		 * default disposition takes the process. */
+		if(started && strstr(msg, "trap:") != nil &&
+		   ur->pc > 0x10000 && ur->pc < 0x7f000000){
+			int q, ok;
+
+			ok = 0;
+			for(q = 0; q < nguestsegs; q++)
+				if(guestsegs[q][0] <= ur->pc-16 &&
+				   ur->pc+48 <= guestsegs[q][0]+guestsegs[q][1]){
+					ok = 1;
+					break;
+				}
+			if(ok){
+				fprint(2, "linuxrun: FAULTCODE p%d pc=%lux bytes:",
+					getpid(), ur->pc);
+				for(q = -16; q < 48; q++)
+					fprint(2, " %2.2ux", ((uchar*)ur->pc)[q]);
+				fprint(2, "\n");
+			}
+		}
 	}
 	if(msg != nil && strcmp(msg, "linux sys") == 0){
 		/* the kernel gates guest int $0x80 here (devldt procs) */
