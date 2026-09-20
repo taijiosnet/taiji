@@ -30,7 +30,7 @@ Environment: Debian runtime at `/debian/rootfs`, `Xvfb` 24-bit display,
 
 | Application | Launcher id | Launch | Input | Save | Clipboard | Close | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Text Editor (`xedit`) | `text-editor` | menu, taskbar, `rill-open` for `.txt` and other text suffixes | keyboard, pointer; US core layout, navigation keys, control characters | writes the shared `$home/Documents`; either runtime sees the changes | UTF-8 text both directions up to 1 MiB, INCR receive supported | window `x` uses `WM_DELETE_WINDOW` when the app offers it; otherwise Quit | unsaved-change dialogs stay inside the app display; the bridge negotiates RandR and follows the window size when the X server permits |
+| Text Editor (`xterm` + `nano`) | `text-editor` | menu, taskbar, `rill-open` for `.txt` and other text suffixes | keyboard, pointer; US core layout, navigation keys, control characters | writes the shared `$home/Documents`; either runtime sees the changes | UTF-8 text both directions up to 1 MiB, INCR receive supported | window `x` uses `WM_DELETE_WINDOW` when the app offers it; otherwise Quit | unsaved-change dialogs stay inside the app display; the bridge negotiates RandR and follows the window size when the X server permits |
 | Eyes (`xeyes`) | `eyes` | menu, taskbar | pointer tracking | n/a | n/a | window `x` or Quit | simple X client; smallest runtime requirement |
 
 ## Verification record

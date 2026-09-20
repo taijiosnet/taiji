@@ -1,12 +1,15 @@
 #!/bin/sh
 # Fetch and stage Debian's i386 Wine packages into the Debian root, using
-# the same staging pattern as fetch-xfce.sh.  The staged tree is
+# the same staging pattern as fetch-debian.sh.  The staged tree is
 # gitignored; it is runtime material, not source.
+# SUITE selects the Debian release (default: trixie).
 set -eu
-root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+suite="${SUITE:-trixie}"
+root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$root"
 tmp="$(mktemp -d)"
-curl -sL -o "$tmp/Packages.xz" http://deb.debian.org/debian/dists/bookworm/main/binary-i386/Packages.xz
+echo "staging wine from Debian $suite i386"
+curl -sL -o "$tmp/Packages.xz" "http://deb.debian.org/debian/dists/$suite/main/binary-i386/Packages.xz"
 xz -d "$tmp/Packages.xz"
 python3 - "$tmp" <<'PY'
 import os, subprocess, sys

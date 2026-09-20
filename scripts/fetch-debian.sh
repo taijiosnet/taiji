@@ -1,15 +1,21 @@
 #!/bin/sh
-# Fetch and stage the Debian XFCE root for the Debian namespace.
-# The staged tree is gitignored; it is material, not source.
+# Fetch and stage the Debian base root (X server, apps, shell) for the
+# Debian namespace. The staged tree is gitignored; it is material, not
+# source.
+# SUITE selects the Debian release (default: trixie).
 set -eu
+suite="${SUITE:-trixie}"
 root="$(dirname "$0")/.."
 tmp="$(mktemp -d)"
-curl -sL -o "$tmp/Packages.xz" http://deb.debian.org/debian/dists/bookworm/main/binary-i386/Packages.xz
+echo "staging Debian $suite i386 base"
+curl -sL -o "$tmp/Packages.xz" "http://deb.debian.org/debian/dists/$suite/main/binary-i386/Packages.xz"
 xz -d "$tmp/Packages.xz"
 python3 - "$tmp" <<'PY'
 import os, re, subprocess, sys
 tmp = sys.argv[1]
-ROOTS = ["xvfb", "xterm", "x11-apps", "xfwm4", "xfce4-panel", "xfdesktop",
+ROOTS = ["xvfb", "xterm", "x11-apps",
+         # Text Editor launches nano inside xterm; trixie has no xedit
+         "nano",
          "fonts-dejavu-core",
          # Xorg compiles its keymap by running xkbcomp through /bin/sh
          "dash"]

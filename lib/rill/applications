@@ -52,7 +52,7 @@ Id=text-editor
 Name=Text Editor
 Comment=Edit shared documents
 Categories=Utility;
-Exec=window -m -dx 648 -dy 516 linux-app -t 'Text Editor' xedit -geometry 640x480+0+0
+Exec=window -m -dx 648 -dy 516 linux-app -t 'Text Editor' xterm -geometry 640x480+0+0 -e nano
 Icon=doc
 
 [Desktop Entry]
