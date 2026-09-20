@@ -4166,11 +4166,16 @@ dosyscall(Ureg *ur)
 				 * hide readable data forever (the daemon
 				 * then starved the client and its auth
 				 * timeout killed the connection).  Extra
-				 * events are legal spurious wakeups. */
+				 * IN events are legal spurious wakeups.
+				 * EPOLLOUT is reported only when the
+				 * registration asks for it: reporting it
+				 * unconditionally wakes every poll of an
+				 * IN-only watch and Xorg's main loop
+				 * spins at full CPU. */
 				evv = eptab[i].events & 0xffffffff;
 				slot = sockslot((int)eptab[i].fd);
 				if(slot >= 0 && sockmap[slot][2] != 0){
-					evv = 4;	/* EPOLLOUT always */
+					evv &= 4;	/* EPOLLOUT only if registered */
 					if(sockinready((int)eptab[i].fd) > 0)
 						evv |= 1;
 				}
