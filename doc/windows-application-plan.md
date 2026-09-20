@@ -31,7 +31,7 @@ Requirements:
 
 The Wine package set is now **installed**: `scripts/fetch-wine.sh` stages
 Debian bookworm's i386 `wine`, `wine32`, and `libwine` closure (115
-packages) into `/debian/rootfs` the same way `fetch-xfce.sh` does. The
+packages) into `/debian/rootfs` the same way `fetch-debian.sh` does. The
 probe `cfg/q9/wine-measure.rc` runs Wine through `linuxrun` and captures
 the result. Measured progress so far:
 
