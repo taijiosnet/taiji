@@ -66,12 +66,13 @@ jobs:
           git -C sys/src/kryon checkout --detach FETCH_HEAD
           git -C sys/src/kryon log -1 --oneline
 
-      - name: Initialize Kryon Vendor Submodule
+      - name: Initialize Kryon Vendor Submodules
         # The plan9 backend builds from raylib's bundled externals
-        # (stb_image.h, raudio.c); the other vendor trees are not needed.
+        # (stb_image.h, raudio.c); ui_grapheme includes the utf8proc
+        # amalgamation; the other vendor trees are not needed.
         run: |
           set -euo pipefail
-          git -C sys/src/kryon submodule update --init vendor/raylib
+          git -C sys/src/kryon submodule update --init vendor/raylib vendor/utf8proc
 
       - name: Install QEMU
         run: |

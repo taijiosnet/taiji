@@ -38,7 +38,7 @@ main(void)
     unsigned char digest[32];
     KryJson *doc;
     KryJson *flag;
-    int theme;
+    Theme theme;
 
     kry_sha256_init(&sha);
     kry_sha256_update(&sha, probe_input, strlen(probe_input));
@@ -61,8 +61,8 @@ main(void)
     }
     kry_json_free(doc);
 
-    theme = GetDefaultThemeForThemeStyle(THEME_STYLE_MATERIAL);
-    if(theme <= 0) {
+    theme = ThemeDefaultLight();
+    if(theme.name == nil || theme.mode != THEME_MODE_LIGHT) {
         print("kryon-probe-failed: theme catalog\n");
         exits("theme");
     }

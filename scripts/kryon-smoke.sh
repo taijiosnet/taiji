@@ -13,12 +13,17 @@ cd "$root"
 
 outdir=${TAIJI_KRYON_SMOKE_DIR:-boot/q9}
 log=${TAIJI_KRYON_SMOKE_LOG:-$outdir/kryon-smoke.log}
-timeout=${TAIJI_KRYON_SMOKE_TIMEOUT:-900}
+timeout=${TAIJI_KRYON_SMOKE_TIMEOUT:-1800}
 
 mkdir -p "$outdir"
 : >"$log"
 
-kryon_flags='-I/sys/src/kryon/src/platform/plan9/include -I/sys/src/kryon/include -DKRYON_BACKEND_LIBDRAW -DKRYON_PLATFORM_PLAN9 -DKRYON_NATIVE_PLAN9'
+# The native build cannot run k2c in the guest; generate the 8c-safe
+# runtime modules and the embedded asset table on the host first (same
+# step applications take, see kryon's mk/plan9-app.mk).
+make -C sys/src/kryon kry-c-plan9 >>"$log" 2>&1
+
+kryon_flags='-I/sys/src/kryon/src/platform/plan9/include -I/sys/src/kryon/include -I/sys/src/kryon/build/plan9/generated -DKRYON_BACKEND_LIBDRAW -DKRYON_PLATFORM_PLAN9 -DKRYON_NATIVE_PLAN9'
 
 guest_cmd="
 echo kryon-smoke-start

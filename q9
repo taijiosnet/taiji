@@ -30,6 +30,9 @@ TMPDIR=${Q9_TMPDIR:-${TMPDIR:-/tmp}}
 export TMPDIR
 
 qemu=${QEMU:-qemu-system-x86_64}
+# The VM is a development artifact; keep it from competing with real work
+# for CPU. Set Q9_QEMU_NICE= to disable.
+qemu_nice=${Q9_QEMU_NICE-nice -n 19}
 image=${Q9_IMAGE:-boot/pxeboot.raw}
 textmac=${Q9_MAC:-52:54:00:12:34:57}
 guimac=${Q9_GUI_MAC:-52:54:00:12:34:58}
@@ -578,7 +581,7 @@ qemu_common()
 	if qemu_autosave; then
 		if [ "$fresh" != true ] && has_checkpoint; then
 			echo "q9: resuming pre-desktop checkpoint: $sessionstate" >&2
-			"$qemu" -m "$mem" -smp "$smp" \
+			$qemu_nice "$qemu" -m "$mem" -smp "$smp" \
 				-drive file="$driveimage",format=raw $snapshotarg \
 				-device "$netdevice,netdev=net0,mac=$mac" \
 				-netdev "user,id=net0,$u9fs,$tftp" \
@@ -588,7 +591,7 @@ qemu_common()
 				-incoming "exec:cat $sessionstate" "$@"
 		else
 			echo 'q9: no pre-desktop checkpoint; cold booting' >&2
-			"$qemu" -m "$mem" -smp "$smp" \
+			$qemu_nice "$qemu" -m "$mem" -smp "$smp" \
 				-drive file="$driveimage",format=raw $snapshotarg \
 				-device "$netdevice,netdev=net0,mac=$mac" \
 				-netdev "user,id=net0,$u9fs,$tftp" \
@@ -597,7 +600,7 @@ qemu_common()
 				-action shutdown=pause -no-shutdown "$@"
 		fi
 	else
-		"$qemu" -m "$mem" -smp "$smp" \
+		$qemu_nice "$qemu" -m "$mem" -smp "$smp" \
 			-drive file="$driveimage",format=raw $snapshotarg \
 			-device "$netdevice,netdev=net0,mac=$mac" \
 			-netdev "user,id=net0,$u9fs,$tftp" "$@"
