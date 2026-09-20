@@ -815,7 +815,9 @@ threadmain(int argc, char **argv)
 	threadnotify(timeout, 1);
 	xconnect(&x, argv[0]);
 	if(test){
+		alarm(30000); /* fail fast instead of hanging on a silent server */
 		selftest(argv[0]);
+		alarm(0);
 		threadexitsall(nil);
 	}
 	if(shot != nil){

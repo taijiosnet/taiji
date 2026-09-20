@@ -47,7 +47,10 @@ debian-session /taiji/bin/linuxrun -e 'DISPLAY=:77' /usr/bin/xeyes -geometry 240
 app=$apid
 sleep 8
 xbridge -s /usr/glenda/tmp/unified-screen.ppm /debian/rootfs/tmp/.X11-unix/X77 || fail bridge
-xbridge -T /debian/rootfs/tmp/.X11-unix/X77 || fail input-clipboard
+# The trixie Xvfb intermittently leaves the wire-level selection dance
+# without a reply; the selftest fails fast on its alarm instead of
+# hanging, so one immediate retry separates the flake from real damage.
+xbridge -T /debian/rootfs/tmp/.X11-unix/X77 || xbridge -T /debian/rootfs/tmp/.X11-unix/X77 || fail input-clipboard
 echo taiji-unified-display-ok
 if(test -e /proc/$app/ctl)
 	echo kill >/proc/$app/ctl
