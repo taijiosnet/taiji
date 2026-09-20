@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT_PAYLOAD_FILES = (
     "386/bin/rill",
-    "386/bin/ktrem",
+    "386/bin/t9",
     "386/bin/shelf",
     "386/bin/explorer",
     "386/bin/inbe",

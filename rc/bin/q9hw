@@ -47,7 +47,7 @@ for(i in /dev/draw /dev/draw/new /dev/vgactl /dev/mouse /dev/kbd /dev/kbin /dev/
 }
 
 say 'section	desktop'
-for(i in ktrem rill shelf acme rio stats) {
+for(i in t9 rill shelf acme rio stats) {
 	if(test -x /bin/$i)
 		say 'ok	'$i
 	if not

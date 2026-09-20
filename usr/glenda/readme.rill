@@ -1,7 +1,7 @@
 Rill is the default TaijiOS desktop in this tree.
 
 Use the desktop menu or the Run command to open bundled programs.
-ktrem opens the terminal, and startwm starts the unified Rill desktop.
+t9 opens the terminal, and startwm starts the unified Rill desktop.
 The taskbar switches between native and supported Debian applications.
 Terminal, Files, and Settings open in their own native windows.
 

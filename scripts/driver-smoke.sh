@@ -34,9 +34,9 @@ if not {
 
 must test -d /net/ether0
 must test -d /net/tcp
-must test -d /sys/src/ktrem
+must test -d /sys/src/t9
 must test ! -d /sys/src/kapsule
-must test -x /386/bin/ktrem
+must test -x /386/bin/t9
 must test -x /386/bin/rill
 must test -x /386/bin/shelf
 must test -x /386/bin/inbe

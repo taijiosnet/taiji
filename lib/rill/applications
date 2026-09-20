@@ -4,7 +4,7 @@ Id=terminal
 Name=Terminal
 Comment=Terminal emulator
 Categories=System;Utility;
-Exec=window -m -dx 760 -dy 500 ktrem
+Exec=window -m -dx 760 -dy 500 t9
 Icon=term
 X-Rill-Favorite=true
 

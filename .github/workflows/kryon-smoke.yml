@@ -2,7 +2,7 @@ name: Kryon Smoke
 
 # Native Plan 9 build check for the Kryon library: boots the tree under
 # QEMU, rebuilds libkryon.a with 8c, compiles+links+runs the probe from
-# scripts/kryon-probe.c, and links Rill (which embeds ktrem and shelf).
+# scripts/kryon-probe.c, and links Rill (which embeds t9 and shelf).
 # This is what catches kryon master regressions that only appear on the
 # native compiler.
 
@@ -12,7 +12,7 @@ on:
       - master
     paths:
       - sys/src/kryon
-      - sys/src/ktrem
+      - sys/src/t9
       - sys/src/shelf
       - sys/src/cmd/rill
       - scripts/kryon-smoke.sh
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule update --init \
-            sys/src/kryon sys/src/ktrem sys/src/shelf sys/src/cmd/rill
+            sys/src/kryon sys/src/t9 sys/src/shelf sys/src/cmd/rill
 
       - name: Select Kryon Ref
         if: github.event_name == 'schedule' || inputs.kryon_ref != ''

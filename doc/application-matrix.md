@@ -15,7 +15,7 @@ current verification state.
 
 | Application | Launcher id | Launch | Input | Save | Clipboard | Close | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Terminal (`ktrem`) | `terminal` | menu, taskbar | keyboard, pointer | shell history | `/dev/snarf` both ways | window `x` or `exit` | default terminal for `window -m` |
+| Terminal (`t9`) | `terminal` | menu, taskbar | keyboard, pointer | shell history | `/dev/snarf` both ways | window `x` or `exit` | default terminal for `window -m` |
 | Files (`shelf`) | `files` | menu, taskbar | keyboard, pointer | file tree edits | text selections | window `x` | shared `$home` tree |
 | Settings (`rill --settings`) | `settings` | menu, Control Panel entries | pointer | persists in `$home/lib/rill/settings`; applied at next desktop start | n/a | window `x` | can run beside the desktop |
 | About (`rill --about`) | `about` | menu | pointer | n/a | n/a | window `x` | normal window; no longer embedded in the desktop |

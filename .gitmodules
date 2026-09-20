@@ -5,8 +5,8 @@
 [submodule "sys/src/inbe"]
 	path = sys/src/inbe
 	url = https://github.com/waozixyz/inbe.git
-[submodule "sys/src/ktrem"]
-	path = sys/src/ktrem
+[submodule "sys/src/t9"]
+	path = sys/src/t9
 	url = https://github.com/kryonlabs/t9.git
 [submodule "sys/src/shelf"]
 	path = sys/src/shelf
