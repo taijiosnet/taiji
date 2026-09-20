@@ -17,6 +17,9 @@ Queue*	serialoq;		/* serial console output */
 Queue*	kprintoq;		/* console output, for /dev/kprint */
 ulong	kprintinuse;		/* test and set whether /dev/kprint is open */
 int	iprintscreenputs = 1;
+int	noconscreen;		/* *noconscreen=1: keep console text off the
+				 * display (serial console only) so a GUI boot
+				 * never shows console text */
 
 int	panicking;
 
@@ -168,7 +171,7 @@ putstrn0(char *str, int n, int usewrite)
 			qwrite(kprintoq, str, n);
 		else
 			qiwrite(kprintoq, str, n);
-	}else if(screenputs != nil)
+	}else if(screenputs != nil && !noconscreen)
 		screenputs(str, n);
 
 	if(serialoq == nil){
@@ -662,6 +665,7 @@ consinit(void)
 {
 	todinit();
 	randominit();
+	noconscreen = getconf("*noconscreen") != nil;
 	/*
 	 * at 115200 baud, the 1024 char buffer takes 56 ms to process,
 	 * processing it every 22 ms should be fine

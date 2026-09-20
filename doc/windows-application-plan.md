@@ -180,15 +180,29 @@ wineapploader, and wineserver32 - so that exec failure is normal Wine
 behavior, not a staging gap.  The frontier remains the rfork fault after
 the direct wine exec, as documented in round 18.
 
-## Architecture decision to make next
+## Round 20 (2026-09-20): trixie runtime; the rfork fault localized to the rfork-from-note-context itself
 
-Run Wine directly under `linuxrun` (one translation layer, best
-integration, highest syscall surface risk) versus a contained Linux
-runtime hosting Wine with its windows bridged like X11 apps (isolated,
-heavier, doubles IPC). The plan requires measuring actual `linuxrun`
-blockers before committing; the measurement entry point is installing the
-i386 `wine` package set into a throwaway rootfs and running
-`linuxrun wine notepad` with the existing diagnostics.
+The Debian namespace is now trixie (13.7) with Wine 10 staged, and the
+emulated X server no longer spins: linuxrun reported EPOLLOUT for every
+connected socket on every epoll_wait scan regardless of the registered
+mask, so Xorg's main loop woke continuously — the Xvfb that "crashed"
+during xbridge's selection selftest was being churned by that spin. With
+EPOLLOUT gated on registration, a 25-second Xvfb+xeyes soak drops from
+700+ epoll_wait traces to three and the unified smoke (environment,
+documents, xeyes through xbridge, clipboard selftest, teardown) passes
+on trixie.
+
+The wine frontier reading was refined against the source: the clone
+dispatch's CLONE_FILES thread branch needs no segment work (the kernel's
+SG_SHARED segments are inherited whole by fork children through
+segment.c's `sameseg` path, which is exactly the CLONE_VM contract), and
+the snapshot branch already detaches, re-attaches, and copies. The
+documented fault — rfork(RFPROC|RFFDG|RFNOTEG) from note-handler context
+dying on a guest-stack read (0x6001d874) — is therefore inside the
+rfork/noted machinery itself, not the segment bookkeeping around it.
+It still needs the live kernel debugging round 17 prescribed: break on
+sysrfork with the wine probe running and inspect the note/ureg state
+that references guest addresses.
 
 ## Integration checklist once it runs
 

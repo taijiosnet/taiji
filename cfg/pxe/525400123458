@@ -15,3 +15,4 @@ monitor=vesa
 vgasize=1024x768x32
 *nomp=1
 nobootprompt=tcp
+*noconscreen=1

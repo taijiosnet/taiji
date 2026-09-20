@@ -1,6 +1,30 @@
 # Taiji unified desktop: status and remaining work
 
-Updated: 2026-09-19. This describes the local working tree, not a released build.
+Updated: 2026-09-20. This describes the local working tree, not a released build.
+
+## 2026-09-20 revision
+
+- The Debian namespace is Debian 13 **trixie** i386 (fetch-debian.sh /
+  fetch-wine.sh, `SUITE=` overridable): Xvfb/xterm/x11-apps/dash/nano
+  base without the Xfce remnants, **Wine 10** preinstalled (wine,
+  wine32, libwine). Text Editor launches nano in xterm (trixie ships no
+  xedit). `taiji-unified-smoke-ok` passes on the new base.
+- **linuxrun CPU fix**: connected sockets were reported EPOLLOUT on
+  every epoll_wait scan regardless of registration, so the emulated X
+  server's main loop woke continuously at full CPU (700+ epoll_wait
+  traces in a 25-second soak, three after the fix). The Xvfb crashes
+  seen during xbridge's selection selftest were churn from that spin;
+  the smoke now also fails that selftest fast (30-second alarm) with
+  one retry instead of hanging a boot.
+- **Zero-console GUI boot**: `*noconscreen=1` in the GUI plan9.ini
+  profiles keeps all kernel and rc console text off the display (serial
+  console only), so a graphical boot goes from firmware straight to the
+  rendered Rill desktop; `q9` runs QEMU under `nice` by default
+  (`Q9_QEMU_NICE=` disables) so development boots do not compete for
+  CPU.
+- The terminal application is **t9** (renamed from ktrem, hosted
+  directly in Rill); the desktop submodules track kryon and rill
+  master.
 
 ## Overall status
 

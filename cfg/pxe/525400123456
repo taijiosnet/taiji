@@ -31,3 +31,5 @@ mouseport=ps2intellimouse
 monitor=vesa
 *nomp=1
 nobootprompt=tcp
+
+*noconscreen=1
