@@ -69,3 +69,4 @@ sys/src/ape/lib/ap/syscall/gencall
 
 # generated Plan 9 user data archive
 /usr/glenda/data.tgz
+/386/lib/libkryon.a
