@@ -64,14 +64,8 @@ sys/src/9/pc/pcvirt.rootc.c
 sys/src/9/pc/reboot.h
 sys/src/ape/lib/ap/syscall/gencall
 
-# the staged Debian XFCE root lives in the tree but ships via the
-# build, not via git (it is fetched from the archive by scripts/)
-debian/rootfs/usr/
-debian/rootfs/bin/
-debian/rootfs/sbin/
-debian/rootfs/var/
-debian/rootfs/lib/
-debian/rootfs/opt/
-debian/rootfs/root/README
-!debian/rootfs/root/README
-debian/rootfs/tmp/lrsnap.*
+# the staged Debian XFCE root is fetched by scripts and never tracked
+/debian/rootfs/
+
+# generated Plan 9 user data archive
+/usr/glenda/data.tgz
