@@ -39,6 +39,7 @@ Environment: Debian runtime at `/debian/rootfs`, `Xvfb` 24-bit display,
 | --- | --- | --- |
 | 2026-09-19 | FPU-fixed kernel + rebuilt desktop | `taiji-fp-exception-ok`, `taiji-window-smoke-ok`, `taiji-unified-smoke-ok` |
 | 2026-09-19 | Desktop feature build (Ctrl+Tab, About window, rill-open, 1 MiB/INCR clipboard, RandR negotiation, launch-failure reporting) | `taiji-unified-smoke-ok` incl. 300 KiB round trips, INCR, close protocol; RandR negotiated but refused by this rootfs's Xvfb (letterbox fallback verified) |
+| 2026-09-28 | Native Kryon Plan 9 ABI gate (Ziran `582592e`, Kryon `97f7aa3f`, Taiji `cf414344`) | `make kryon-native-plan9-smoke`: ok in 20s; 24576-byte capture beginning `fe0000ff`, with q9 type-signature checking enabled |
 
 Add a row per verified build; do not delete prior rows.
 

@@ -107,6 +107,7 @@ These are results from the verified runs of this working tree:
 | `make linuxrun-smoke` | `taiji-linuxrun-smoke-ok` | None pending. |
 | `make driver-smoke` (payload incl. `rill-open`, associations) | passed | None pending. |
 | `make desktop-boot-smoke` (cold GUI boot + rendered screenshot) | `taiji-desktop-boot-ok` (1024×768, dark theme desktop with panel) | Interactive taskbar/menu/Ctrl+Tab verification. |
+| `make kryon-native-plan9-smoke` | Kryon native libdraw probe compiled and linked with q9 type signatures enabled; 24576-byte capture beginning `fe0000ff` | Extend from the smoke probe to a Ziran/Kryon Taiji application. |
 | Kernel build (`386/9pc` with the FPU fix and Ctrl+Tab rune) | built and installed; boots | `9pcvirt` variant not rebuilt in this pass. |
 | Web image payload | `make site` (regeneration in flight) | Boot the complete image. |
 
