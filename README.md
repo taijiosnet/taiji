@@ -1,6 +1,6 @@
 # TaijiOS
 
-[![Cloudflare Pages](https://github.com/kryonlabs/taiji/actions/workflows/pages.yml/badge.svg)](https://github.com/kryonlabs/taiji/actions/workflows/pages.yml)
+[![Cloudflare Pages](https://github.com/taijiosnet/taiji/actions/workflows/pages.yml/badge.svg)](https://github.com/taijiosnet/taiji/actions/workflows/pages.yml)
 
 ![TaijiOS desktop banner](site/assets/taijios-banner.png)
 
@@ -49,7 +49,7 @@ for Windows support.
 To boot TaijiOS, install qemu, so that you have `qemu-system-x86_64` in your path.
 Then:
 
-	git clone https://github.com/kryonlabs/taiji.git
+	git clone https://github.com/taijiosnet/taiji.git
 	./taiji/boot/qemu
 
 The qemu script builds u9fs in taiji/sys/src/cmd/unix/u9fs and then runs
