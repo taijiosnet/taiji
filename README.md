@@ -71,3 +71,24 @@ to test an as-yet-uninstalled kernel.
 The plan9.ini is loaded from [/cfg/pxe/525400123456](cfg/pxe/525400123456).
 (That number is the VM's MAC address.)
 Changes made to that file will be visible on the next VM boot.
+
+## Ziran migration
+
+TaijiOS is being rewritten in current Ziran, with `plan9-c` as the native
+transpilation path. Rill must be restored as the main desktop environment,
+entirely in Ziran and using current Kryon. Compiler or runtime gaps belong in
+Ziran; reusable UI capabilities belong in upstream Kryon; desktop policy
+belongs in upstream Rill. App submodules contain committed upstream source.
+
+This migration is not complete. The OS still contains thousands of C files
+across commands, kernel and drivers, boot code, compatibility libraries, libc,
+graphics, cryptography, networking, and other libraries. Assembly, the native
+build/bootstrap path, and the remaining application implementations also
+require an explicit migration and verification path. Passing a library or
+shell probe does not establish that the OS or desktop has been rewritten.
+
+The Rill shell and stub adapter now use Ziran implementations. Run
+`make rill-ziran-plan9-smoke` to generate their behavior tests through
+`plan9-c`, compile and link with native `8c`/`8l`, and run them in the private
+TaijiOS guest. The graphical desktop, Rill's other services, T9's remaining
+legacy modules, and the wider OS migration remain unfinished.

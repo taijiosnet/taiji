@@ -57,3 +57,7 @@ kryon-native-plan9-smoke:
 
 kryon-smoke:
 	sh scripts/kryon-smoke.sh
+
+.PHONY: rill-ziran-plan9-smoke
+rill-ziran-plan9-smoke:
+	sh scripts/rill-ziran-plan9-smoke.sh
