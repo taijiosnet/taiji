@@ -64,4 +64,4 @@ rill-ziran-plan9-smoke:
 
 .PHONY: rio-ziran-plan9
 rio-ziran-plan9:
-	env -u DISPLAY -u WAYLAND_DISPLAY ../ziranlang/ziran/build/bin/ziran build --target=plan9-c --root sys/src/cmd/rio9 --module-path ../ziranlang/ziran/std -o sys/src/cmd/rio9/build/ziran/plan9 sys/src/cmd/rio9/window_snapshot.zi
+	env -u DISPLAY -u WAYLAND_DISPLAY ../../ziranlang/ziran/build/bin/ziran build --target=plan9-c --root sys/src/cmd/rio9 --module-path ../../ziranlang/ziran/std -o sys/src/cmd/rio9/build/ziran/plan9 sys/src/cmd/rio9/window_snapshot.zi
