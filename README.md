@@ -88,13 +88,18 @@ require an explicit migration and verification path. Passing a library or
 shell probe does not establish that the OS or desktop has been rewritten.
 
 The Rill shell, panel layouts, settings persistence, stub adapter, Plan 9
-platform services, panel clock, Run dialog, Applications menu, and Calendar
-now use Ziran implementations. A new `rill-desktop` entrypoint adds the
+platform services, panel clock, Run dialog, Applications menu, Calendar,
+Settings, and About now use Ziran implementations. A new `rill-desktop` entrypoint adds the
 current Kryon panel, live task/launcher snapshots, in-place menus, all four
 panel edges, autohide, scrolling, item moves and persistence, and available
 volume/clipboard/session controls. Native desktop overlays use only the
 client's own window namespace. The converted screens and desktop share a
-native libdraw application host. Rio's
+native libdraw application host. Settings uses current Kryon controls for
+desktop preferences, system control panels, all eight panel configurations,
+Xfce panel import, display preview rollback, and all nineteen window shortcuts.
+Saved desktop preferences and panel layouts reload without restarting the
+new desktop. Native display/input and other missing services still need
+implementations; their controls remain unavailable. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
 behavior tests from source and saved IR through `plan9-c`, compile and link
@@ -106,13 +111,18 @@ builds rio, compiles Rill's generated service objects through its native
 It also checks Run history, application matching, categories and recent
 launchers, Unicode editing, scrolling, session confirmation, clock formatting,
 Gregorian calendars, month navigation, timestamps after 2038, panel editing,
-window action failures, clipboard overflow, autohide, and wheel ownership. It renders
+window action failures, clipboard overflow, autohide, wheel ownership, panel
+JSON validation, shortcut collision detection, concurrent preference merging,
+exclusive native file leases, wallpaper
+rotation, held pointer clicks, and display rollback. It renders
 the converted Kryon screens with native libdraw from source and saved IR and
 compares their captures. It builds, installs into private guest directories,
-and renders the actual native Run, Applications, Calendar, and desktop executables
-through their `app/*.mk` recipes.
+and renders the actual native Run, Applications, Calendar, Settings, About,
+and desktop executables through their `app/*.mk` recipes.
+`TAIJI_RILL_ZIRAN_SUITES` and `TAIJI_RILL_ZIRAN_APPLICATIONS` can select
+focused checks; the default runs every suite and all six applications.
 The new desktop entrypoint is not yet the boot default: desktop files,
-Settings/About, full tray rendering and menus, plugin Properties, notifications,
+full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
 graphical desktop, Rill's other services, T9's remaining
 legacy modules, and the wider OS migration remain unfinished.

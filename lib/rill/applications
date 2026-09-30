@@ -42,7 +42,7 @@ Id=settings
 Name=Settings
 Comment=Desktop preferences
 Categories=Settings;System;
-Exec=window -m -dx 548 -dy 448 rill --settings
+Exec=window -m -dx 548 -dy 448 rill-settings
 Icon=settings
 X-Rill-Favorite=true
 
@@ -70,5 +70,5 @@ Id=about
 Name=About Rill
 Comment=Session information
 Categories=Utility;
-Exec=window -m -dx 500 -dy 460 rill --about
+Exec=window -m -dx 500 -dy 460 rill-about
 Icon=about

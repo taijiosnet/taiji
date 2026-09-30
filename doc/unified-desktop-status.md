@@ -1,6 +1,31 @@
 # Taiji unified desktop: status and remaining work
 
-Updated: 2026-09-20. This describes the local working tree, not a released build.
+Updated: 2026-09-30. This describes the local working tree, not a released build.
+
+## Current Ziran conversion
+
+Rill is being restored entirely in current Ziran and Kryon as TaijiOS's main
+desktop environment. Run, Applications, Calendar, Settings, About, and the
+new desktop entrypoint have native `plan9-c` output and `app/*.mk` recipes.
+All six applications compiled, linked with `8c`/`8l`, and rendered in the
+private Taiji guest. Settings and desktop UI checks passed from source and
+saved IR, including held clicks, scrolling, display rollback, panel and
+shortcut editing, and preference merging. Exclusive native file leases and
+overlapping saves also passed from source and saved IR.
+
+Private Xvfb window checks verified that the separate Settings app updates
+panel placement and clock formatting in the running hosted desktop while
+preserving recent applications. Native Settings was captured again after
+correcting compact slider spacing. These results are scoped to the converted
+applications and selected native suites; the older boot and mixed-application
+results below describe the previous desktop revision.
+
+The Ziran desktop is not yet the boot default. Desktop files and file
+operations, tray images and menus, notifications, plugin Properties, window
+management, session services, and missing native platform callbacks still
+need conversion and parity checks. The previous full C desktop depends on
+the former Kryon interface, so its build is not restored against current
+Kryon. The wider OS rewrite also remains incomplete.
 
 ## 2026-09-20 revision
 
