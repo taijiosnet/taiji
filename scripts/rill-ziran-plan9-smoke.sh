@@ -7,7 +7,7 @@ ziran=${ZIRAN_BIN:-"$root/../../ziranlang/ziran/build/bin/ziran"}
 std=${ZIRAN_STD:-"$root/../../ziranlang/ziran/std"}
 rill=${RILL_DIR:-"$root/sys/src/cmd/rill"}
 kryon=${KRYON_DIR:-"$root/sys/src/kryon"}
-timeout=${TAIJI_RILL_ZIRAN_TIMEOUT:-480}
+timeout=${TAIJI_RILL_ZIRAN_TIMEOUT:-600}
 log=$root/build/rill-ziran-plan9.log
 mkdir -p build usr/glenda/tmp
 exec 9>build/rill-ziran-plan9.lock
@@ -25,31 +25,34 @@ unset DISPLAY WAYLAND_DISPLAY RILL_CONTAINED_X11
 "$ziran" build --target=plan9-c --define NATIVE_PLAN9 --root "$rill/src" \
     --module-path "$std" -o "$rill/build/ziran/plan9" \
     "$rill/src/shell.zi" "$rill/src/panel.zi" "$rill/src/settings.zi" \
-    "$rill/src/platform_plan9.zi" "$rill/src/run_dialog.zi" >>"$log" 2>&1
+    "$rill/src/platform_plan9.zi" "$rill/src/run_dialog.zi" "$rill/src/applications.zi" >>"$log" 2>&1
 "$ziran" build --target=plan9-c --define NATIVE_PLAN9 --root "$rill/tests" \
     --module-path "$rill/src" --module-path "$std" \
     -o "$rill/build/ziran/plan9-test" "$rill/tests/persistence_test.zi" >>"$log" 2>&1
-"$ziran" build --target=plan9-c --define NATIVE_PLAN9 --define PLAN9_BUILD \
-    --root "$rill/app" --module-path "$rill/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" --module-path "$std" \
-    -o "$rill/build/ziran/run-plan9" "$rill/app/run_main.zi" >>"$log" 2>&1
-mkdir "$stage/run-app-home"
+for application in run applications; do
+    "$ziran" build --target=plan9-c --define NATIVE_PLAN9 --define PLAN9_BUILD \
+        --root "$rill/app" --module-path "$rill/src" \
+        --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" --module-path "$std" \
+        -o "$rill/build/ziran/$application-plan9" "$rill/app/${application}_main.zi" >>"$log" 2>&1
+    mkdir "$stage/$application-app-home"
+done
+mkdir "$stage/app-bin"
 rill_objects=
 for source in "$rill"/build/ziran/plan9/*.c; do
     module=${source##*/}
     rill_objects="$rill_objects build/ziran/plan9/${module%.c}.8"
 done
-suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 window_snapshot shell persistence platform_plan9 run run_ui"}
+suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch window_snapshot shell persistence platform_plan9 run run_ui applications applications_ui"}
 guest_suites=
 for suite in $suites; do
     case "$suite" in
-        file_plan9|process_plan9|window_snapshot|shell|persistence|platform_plan9|run|run_ui) ;;
+        file_plan9|process_plan9|plan9_switch|window_snapshot|shell|persistence|platform_plan9|run|run_ui|applications|applications_ui) ;;
         *) echo "unknown native suite: $suite" >&2; exit 1 ;;
     esac
     guest_suites="$guest_suites $suite-source $suite-saved"
     source_root=$rill/tests
     input=$source_root/${suite}_test.zi
-    if test "$suite" = file_plan9 || test "$suite" = process_plan9; then
+    if test "$suite" = file_plan9 || test "$suite" = process_plan9 || test "$suite" = plan9_switch; then
         source_root=$root/../../ziranlang/ziran/tests/spec
         input=$source_root/${suite}_test.zi
     fi
@@ -120,12 +123,13 @@ if(~ \$failed 0) {
         failed=1
     }
 }
+for(application in run applications) {
 if(~ \$failed 0) {
     cd /sys/src/cmd/rill
-    if(mk -f app/run.mk) {
-        echo rill-run-plan9-build-ok
-        if(home=$guest_stage/run-app-home KRYON_OFFSCREEN=1 KRYON_CAPTURE_PATH=$guest_stage/run-app.rgba font=/lib/font/bit/pelm/latin1.8.font ./build/rill-run.8.out)
-            echo rill-run-plan9-app-ok
+    if(mk -f app/\$application^.mk install 'BIN=$guest_stage/app-bin') {
+        echo rill-^\$application^-plan9-build-ok
+        if(home=$guest_stage/^\$application^-app-home KRYON_OFFSCREEN=1 KRYON_CAPTURE_PATH=$guest_stage/^\$application^-app.rgba font=/lib/font/bit/pelm/latin1.8.font $guest_stage/app-bin/rill-^\$application)
+            echo rill-^\$application^-plan9-app-ok
         if not {
             echo rill-ziran-plan9-run-failed
             failed=1
@@ -135,6 +139,7 @@ if(~ \$failed 0) {
         echo rill-ziran-plan9-compile-failed
         failed=1
     }
+}
 }
 if(~ \$failed 0)
     echo rill-ziran-plan9-run-ok
@@ -153,28 +158,32 @@ start=$(date +%s)
 while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
     if rg -q '^rill-ziran-plan9-run-ok' "$log"; then
         stop_vm
-        if test ! -f "$stage/run-app.rgba" || test "$(wc -c <"$stage/run-app.rgba")" -ne 2304000; then
-            echo 'rill-ziran-plan9: actual native Run application did not render its frame' >&2
-            exit 1
-        fi
-        case " $suites " in
-            *" run_ui "*)
-                expected=576000
-                for input in source saved; do
-                    capture=$stage/run_ui-$input/capture.rgba
-                    if test ! -f "$capture" || test "$(wc -c <"$capture")" -ne "$expected"; then
-                        echo "rill-ziran-plan9: missing or incomplete native Run UI capture" >&2
-                        exit 1
-                    fi
-                done
-                cmp "$stage/run_ui-source/capture.rgba" "$stage/run_ui-saved/capture.rgba"
-                ;;
-        esac
+        for application in run applications; do
+            if test ! -f "$stage/$application-app.rgba" || test "$(wc -c <"$stage/$application-app.rgba")" -ne 2304000; then
+                echo "rill-ziran-plan9: actual native $application application did not render its frame" >&2
+                exit 1
+            fi
+        done
+        for suite in run_ui applications_ui; do
+            case " $suites " in
+                *" $suite "*)
+                    expected=576000
+                    for input in source saved; do
+                        capture=$stage/$suite-$input/capture.rgba
+                        if test ! -f "$capture" || test "$(wc -c <"$capture")" -ne "$expected"; then
+                            echo "rill-ziran-plan9: missing or incomplete native $suite capture" >&2
+                            exit 1
+                        fi
+                    done
+                    cmp "$stage/$suite-source/capture.rgba" "$stage/$suite-saved/capture.rgba"
+                    ;;
+            esac
+        done
         trap cleanup EXIT HUP INT TERM
         echo "rill-ziran-plan9: ok ($(( $(date +%s) - start ))s, native 8c/8l)"
         exit 0
     fi
-    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|run|run-ui)-test-failed|(file|process)-plan9-test-failed' "$log"; then
+    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|run|run-ui|applications|applications-ui)-test-failed|(file|process)-plan9-test-failed|plan9-switch-test-failed|rc: .*syntax error' "$log"; then
         tail -70 "$log" >&2
         exit 1
     fi
