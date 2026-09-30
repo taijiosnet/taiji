@@ -88,8 +88,9 @@ require an explicit migration and verification path. Passing a library or
 shell probe does not establish that the OS or desktop has been rewritten.
 
 The Rill shell, panel layouts, settings persistence, stub adapter, Plan 9
-platform services, and Run dialog now use Ziran implementations. The Run
-screen uses current Kryon widgets and a native libdraw entrypoint. Rio's
+platform services, panel clock, Run dialog, Applications menu, and Calendar
+now use Ziran implementations. The three converted screens use current
+Kryon widgets and share a native libdraw application host. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
 behavior tests from source and saved IR through `plan9-c`, compile and link
@@ -98,9 +99,12 @@ checks native file and process operations, application and icon registry
 overrides, and window controls restricted to processes launched by Rill. It
 builds rio, compiles Rill's generated service objects through its native
 `mkfile`, and runs the persistence checks through `mk test`.
-It also checks Run history, application matching, Unicode editing, and command
-launch behavior, renders the Kryon UI with native libdraw from source and
-saved IR, compares their captures, and builds and renders the actual native
-Run application through `app/run.mk`.
+It also checks Run history, application matching, categories and recent
+launchers, Unicode editing, scrolling, session confirmation, clock formatting,
+Gregorian calendars, month navigation, and timestamps after 2038. It renders
+the converted Kryon screens with native libdraw from source and saved IR and
+compares their captures. It builds, installs into private guest directories,
+and renders the actual native Run, Applications, and Calendar executables
+through their `app/*.mk` recipes.
 The graphical desktop, Rill's other services, T9's remaining
 legacy modules, and the wider OS migration remain unfinished.
