@@ -4,6 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 ziran=${ZIRAN_BIN:-"$root/../ziranlang/ziran/build/bin/ziran"}
+std=${ZIRAN_STD:-"$root/../ziranlang/ziran/std"}
 rill=${RILL_DIR:-"$root/sys/src/cmd/rill"}
 timeout=${TAIJI_RILL_ZIRAN_TIMEOUT:-240}
 log=$root/build/rill-ziran-plan9.log
@@ -17,31 +18,59 @@ trap cleanup EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY RILL_CONTAINED_X11
 
 : >"$log"
-"$ziran" build --target=plan9-c --define NATIVE_PLAN9 \
-    --root "$rill/tests" --module-path "$rill/src" \
-    -o "$stage/generated" "$rill/tests/shell_test.zi" >>"$log" 2>&1
+for suite in shell persistence file_plan9; do
+    source_root=$rill/tests
+    input=$source_root/${suite}_test.zi
+    if test "$suite" = file_plan9; then
+        source_root=$root/../ziranlang/ziran/tests/spec
+        input=$source_root/file_plan9_test.zi
+    fi
+    "$ziran" ir --define NATIVE_PLAN9 --root "$source_root" \
+        --module-path "$rill/src" --module-path "$std" \
+        -o "$stage/$suite-ir" "$input" >>"$log" 2>&1
+    "$ziran" build --target=plan9-c --define NATIVE_PLAN9 \
+        --root "$source_root" --module-path "$rill/src" --module-path "$std" \
+        -o "$stage/$suite-source" "$input" >>"$log" 2>&1
+    "$ziran" build --target=plan9-c --define NATIVE_PLAN9 \
+        --root "$stage/$suite-ir" -o "$stage/$suite-saved" \
+        "$stage/$suite-ir/${suite}_test.zir" >>"$log" 2>&1
+    mkdir "$stage/$suite-source/data" "$stage/$suite-saved/data"
+done
+# Keep the filesystem primitive checks first so failures can be distinguished
+# from application parsing and interrupted-save behavior.
 
 guest_cmd="
 echo rill-ziran-plan9-start
-cd $guest_stage/generated
+cd $guest_stage
 failed=0
-for(source in *.c) {
-    if(! 8c -FTVw \$source) {
-        echo rill-ziran-plan9-compile-failed
-        failed=1
+for(suite in file_plan9-source file_plan9-saved shell-source shell-saved persistence-source persistence-saved) {
+    cd $guest_stage/\$suite
+    echo rill-ziran-plan9-suite \$suite
+    for(source in *.c) {
+        if(! 8c -FTVw \$source) {
+            echo rill-ziran-plan9-compile-failed
+            failed=1
+        }
     }
-}
-if(~ \$failed 0) {
-    if(8l -o ../rill-shell-test *.8) {
-        echo rill-ziran-plan9-compile-ok
-        if(../rill-shell-test)
-            echo rill-ziran-plan9-run-ok
-        if not
-            echo rill-ziran-plan9-run-failed
+    if(~ \$failed 0) {
+        if(8l -o run *.8) {
+            echo rill-ziran-plan9-compile-ok
+            if(RILL_TEST_ROOT=$guest_stage/\$suite/data ZIRAN_TEST_ROOT=$guest_stage/\$suite/data ./run)
+                echo rill-ziran-plan9-suite-ok \$suite
+            if not {
+                echo rill-ziran-plan9-run-failed
+                failed=1
+            }
+        }
+        if not {
+            echo rill-ziran-plan9-link-failed
+            failed=1
+        }
     }
-    if not
-        echo rill-ziran-plan9-link-failed
+    if(~ \$failed 1) break
 }
+if(~ \$failed 0)
+    echo rill-ziran-plan9-run-ok
 fshalt
 "
 
@@ -61,7 +90,7 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
         echo "rill-ziran-plan9: ok ($(( $(date +%s) - start ))s, native 8c/8l)"
         exit 0
     fi
-    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-shell-test-failed' "$log"; then
+    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence)-test-failed|file-plan9-test-failed' "$log"; then
         tail -70 "$log" >&2
         exit 1
     fi

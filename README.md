@@ -87,8 +87,10 @@ build/bootstrap path, and the remaining application implementations also
 require an explicit migration and verification path. Passing a library or
 shell probe does not establish that the OS or desktop has been rewritten.
 
-The Rill shell and stub adapter now use Ziran implementations. Run
-`make rill-ziran-plan9-smoke` to generate their behavior tests through
-`plan9-c`, compile and link with native `8c`/`8l`, and run them in the private
-TaijiOS guest. The graphical desktop, Rill's other services, T9's remaining
+The Rill shell, panel layouts, settings persistence, and stub adapter now use
+Ziran implementations. Run `make rill-ziran-plan9-smoke` to generate their
+behavior tests from source and saved IR through `plan9-c`, compile and link
+with native `8c`/`8l`, and run them in the private TaijiOS guest. The gate also
+checks Ziran's native Plan 9 file operations and interrupted-save recovery.
+The graphical desktop, Rill's other services, T9's remaining
 legacy modules, and the wider OS migration remain unfinished.
