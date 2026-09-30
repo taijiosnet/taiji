@@ -98,8 +98,13 @@ native libdraw application host. Settings uses current Kryon controls for
 desktop preferences, system control panels, all eight panel configurations,
 Xfce panel import, display preview rollback, and all nineteen window shortcuts.
 Saved desktop preferences and panel layouts reload without restarting the
-new desktop. Native display/input and other missing services still need
-implementations; their controls remain unavailable. Rio's
+new desktop. Desktop file selection, icon layout persistence, group dragging,
+folder drops, context menus, rename/New Folder dialogs, and file transfer
+controls now use Ziran and Kryon. Native directory listing, private folder
+creation, and renaming without overwriting are implemented. Native file
+clipboard/transfer/Trash services and PNG icons still need implementation;
+the hosted transfer backend remains C. Native display/input and other missing
+services still need implementations; their controls remain unavailable. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
 behavior tests from source and saved IR through `plan9-c`, compile and link
@@ -113,7 +118,8 @@ launchers, Unicode editing, scrolling, session confirmation, clock formatting,
 Gregorian calendars, month navigation, timestamps after 2038, panel editing,
 window action failures, clipboard overflow, autohide, wheel ownership, panel
 JSON validation, shortcut collision detection, concurrent preference merging,
-exclusive native file leases, wallpaper
+exclusive native file leases, stable file selection after refresh, group
+positions, folder drops, file operation failures, transfer conflicts, wallpaper
 rotation, held pointer clicks, and display rollback. It renders
 the converted Kryon screens with native libdraw from source and saved IR and
 compares their captures. It builds, installs into private guest directories,
@@ -121,7 +127,7 @@ and renders the actual native Run, Applications, Calendar, Settings, About,
 and desktop executables through their `app/*.mk` recipes.
 `TAIJI_RILL_ZIRAN_SUITES` and `TAIJI_RILL_ZIRAN_APPLICATIONS` can select
 focused checks; the default runs every suite and all six applications.
-The new desktop entrypoint is not yet the boot default: desktop files,
+The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
 graphical desktop, Rill's other services, T9's remaining

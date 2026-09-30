@@ -13,6 +13,16 @@ saved IR, including held clicks, scrolling, display rollback, panel and
 shortcut editing, and preference merging. Exclusive native file leases and
 overlapping saves also passed from source and saved IR.
 
+Desktop files now have a Ziran model and Kryon controls for selection,
+persisted icon positions, group dragging, folder drops, context menus,
+rename, New Folder, and transfer progress/conflict choices. Native directory
+listing, Unicode folder creation, and renaming without overwriting existing
+files passed from source and saved IR. The file UI also passed both forms
+in the private guest. The hosted window check created a folder and renamed
+a file while preserving its contents. The focused native gate passed all
+ten source/saved checks and rebuilt, privately installed, and captured the
+desktop executable with its file model in 466 seconds.
+
 Private Xvfb window checks verified that the separate Settings app updates
 panel placement and clock formatting in the running hosted desktop while
 preserving recent applications. Native Settings was captured again after
@@ -20,8 +30,9 @@ correcting compact slider spacing. These results are scoped to the converted
 applications and selected native suites; the older boot and mixed-application
 results below describe the previous desktop revision.
 
-The Ziran desktop is not yet the boot default. Desktop files and file
-operations, tray images and menus, notifications, plugin Properties, window
+The Ziran desktop is not yet the boot default. Remaining file services,
+native clipboard/copy/move/Trash, PNG icons, document association dispatch,
+tray images and menus, notifications, plugin Properties, window
 management, session services, and missing native platform callbacks still
 need conversion and parity checks. The previous full C desktop depends on
 the former Kryon interface, so its build is not restored against current
