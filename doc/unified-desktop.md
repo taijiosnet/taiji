@@ -39,10 +39,14 @@ Register additional tested applications in `/lib/rill/applications` using
 the same pattern. A bare program name passed to `linux-app` resolves under
 `/usr/bin` in the Debian root; absolute Linux paths also work.
 
-Documents open through the same registry with `rill-open file ...`: the
-file-name suffix selects the application from `/lib/rill/associations`
-(`$home/lib/rill/associations` overrides), and files under the native
-`$home` are translated into the Debian runtime's `/home/user` view. The
+Documents open through the same registry with the native Ziran command
+`rill-open file ...`. Each file's extension selects its application from
+`/lib/rill/associations`; `$home/lib/rill/associations` overrides matching
+rules. Partial user application registries retain system entries. Relative
+filenames are resolved from the working directory, and spaces, quotes, and
+Unicode names are passed as one argument. Files under the native `$home`
+are translated into the Debian runtime's `/home/user` view; paths outside
+that directory are rejected for Linux applications. The
 Text Editor launcher opens empty; pass a document through `rill-open` or
 the Files application.
 

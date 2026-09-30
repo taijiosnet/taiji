@@ -23,6 +23,16 @@ a file while preserving its contents. The focused native gate passed all
 ten source/saved checks and rebuilt, privately installed, and captured the
 desktop executable with its file model in 466 seconds.
 
+Document opening is now Ziran as well. The native `rill-open` executable and
+desktop use the same extension/registry resolver and literal argument vectors.
+Source and saved-IR checks passed registry overrides, quoted titles, home
+boundary checks, and the actual command opening absolute and relative
+filenames containing spaces, quotes, shell characters, and Unicode.
+The native gate passed its eight focused source/saved checks, rebuilt and
+captured the desktop, and verified failure status for missing command-line
+arguments in 177 seconds. Ziran's native output now wraps argument-bearing
+`main` functions to translate their return status into Plan 9 exit status.
+
 Private Xvfb window checks verified that the separate Settings app updates
 panel placement and clock formatting in the running hosted desktop while
 preserving recent applications. Native Settings was captured again after
@@ -31,7 +41,7 @@ applications and selected native suites; the older boot and mixed-application
 results below describe the previous desktop revision.
 
 The Ziran desktop is not yet the boot default. Remaining file services,
-native clipboard/copy/move/Trash, PNG icons, document association dispatch,
+native clipboard/copy/move/Trash, PNG icons,
 tray images and menus, notifications, plugin Properties, window
 management, session services, and missing native platform callbacks still
 need conversion and parity checks. The previous full C desktop depends on
@@ -141,7 +151,7 @@ These are results from the verified runs of this working tree:
 | `make window-smoke` (FP regression + Ctrl+Tab task switching) | `taiji-fp-exception-ok`, `taiji-window-smoke-ok` | None pending. |
 | `make unified-smoke` (environment, documents, xeyes, bridge selftest, process cleanup) | `taiji-unified-smoke-ok` incl. 300 KiB round trips, INCR, close protocol, RandR negotiation, `taiji-unified-cleanup-ok` | Interactive typing/saving on the rendered desktop. |
 | `make linuxrun-smoke` | `taiji-linuxrun-smoke-ok` | None pending. |
-| `make driver-smoke` (payload incl. `rill-open`, associations) | passed | None pending. |
+| `make driver-smoke` (payload incl. `rill-open`, associations) | Earlier revision passed; current rerun verifies native `rill-open` failure status but fails because `/386/bin/t9` is absent. | Restore and verify the terminal payload. |
 | `make desktop-boot-smoke` (cold GUI boot + rendered screenshot) | `taiji-desktop-boot-ok` (1024×768, dark theme desktop with panel) | Interactive taskbar/menu/Ctrl+Tab verification. |
 | `make kryon-native-plan9-smoke` | Kryon native libdraw probe compiled and linked with q9 type signatures enabled; 24576-byte capture beginning `fe0000ff` | Extend from the smoke probe to a Ziran/Kryon Taiji application. |
 | Kernel build (`386/9pc` with the FPU fix and Ctrl+Tab rune) | built and installed; boots | `9pcvirt` variant not rebuilt in this pass. |

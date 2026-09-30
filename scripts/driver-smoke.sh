@@ -45,7 +45,11 @@ must test -x /386/bin/rio9
 must test -x /386/bin/linuxrun
 must test -x /386/bin/xbridge
 must test -x /rc/bin/linux-app
-must test -x /rc/bin/rill-open
+must test -x /386/bin/rill-open
+if(/386/bin/rill-open) {
+	echo driver-smoke-fail: rill-open accepted missing arguments
+	fail=1
+}
 must test -r /lib/rill/associations
 must test -x /386/bin/explorer
 must test -x /386/bin/q9taskmgr

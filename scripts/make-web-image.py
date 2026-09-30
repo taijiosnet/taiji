@@ -60,7 +60,7 @@ ROOT_PAYLOAD_FILES = (
     "usr/glenda/lib/wallpaper",
     "rc/bin/debian-session",
     "rc/bin/linux-app",
-    "rc/bin/rill-open",
+    "386/bin/rill-open",
     "doc/unified-desktop.md",
     "rc/bin/deb/install",
     "debian/rootfs/etc/debian_version",

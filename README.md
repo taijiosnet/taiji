@@ -127,6 +127,11 @@ and renders the actual native Run, Applications, Calendar, Settings, About,
 and desktop executables through their `app/*.mk` recipes.
 `TAIJI_RILL_ZIRAN_SUITES` and `TAIJI_RILL_ZIRAN_APPLICATIONS` can select
 focused checks; the default runs every suite and all six applications.
+The native `rill-open` command and desktop share the Ziran document resolver.
+It chooses each file's extension independently, preserves literal filenames,
+retains system applications when the user overrides only part of the registry,
+and limits Linux document translation to the normalized home directory.
+The gate also builds this command and checks its actual argv and exit status.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
