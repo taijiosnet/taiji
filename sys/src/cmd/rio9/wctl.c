@@ -10,6 +10,8 @@
 #include <plumb.h>
 #include "dat.h"
 #include "fns.h"
+#define ZIR_PLAN9_NATIVE_HEADERS_INCLUDED 1
+#include "build/ziran/plan9/window_snapshot.h"
 #include <ctype.h>
 
 char	Ebadwr[]		= "bad rectangle in wctl request";
@@ -387,6 +389,11 @@ writewctl(Xfid *x, char *err)
 			strcpy(err, "window deleted");
 			return -1;
 		}
+	}
+
+	if(cmd != New && cmd != Set && !WindowPidMatches(pid, w->pid)){
+		strcpy(err, "window owner changed");
+		return -1;
 	}
 
 	switch(cmd){

@@ -1,0 +1,35 @@
+#import "window_snapshot"
+
+#scope_file
+Text :: (buffer: []s8, expected: string) -> bool {
+    if expected.count >= buffer.count { return false }
+    index: s64 = 0
+    while index < expected.count {
+        if cast(u8)buffer[index] != expected[index] { return false }
+        index += 1
+    }
+    return buffer[index] == 0
+}
+
+#scope_export
+#program_export
+main :: () -> s32 {
+    buffer: [128]s8
+    expected := "-10 0 640 480 current visible window pid 123\n"
+    count := FormatWindowSnapshot(*buffer[0], 128, -10, 0, 640, 480, 1, 1, 0, 123)
+    if count != cast(s32)expected.count || !Text(buffer[:], expected) {
+        bytes: [128]u8
+        index: s32 = 0
+        while index < count && index < 128 { bytes[index] = cast(u8)buffer[index]; index += 1 }
+        print("window-snapshot-test-failed: first snapshot length %, text %\n", count, TextView(bytes[0:index]))
+        return 1
+    }
+    if FormatWindowSnapshot(*buffer[0], 128, 0, 0, 0, 0, 0, 0, 1, 0) <= 0 ||
+        !Text(buffer[:], "0 0 0 0 notcurrent hidden desktop pid 0\n") { return 2 }
+    if FormatWindowSnapshot(*buffer[0], 5, 0, 0, 0, 0, 0, 0, 0, 1) != 0 || buffer[0] != 0 { return 3 }
+    if FormatWindowSnapshot(null, 128, 0, 0, 0, 0, 0, 0, 0, 1) != 0 { return 4 }
+    if WindowPidMatches(0, 123) == 0 || WindowPidMatches(123, 123) == 0 ||
+        WindowPidMatches(123, 124) != 0 || WindowPidMatches(-1, -1) != 0 || WindowPidMatches(123, 0) != 0 { return 5 }
+    print("window-snapshot-test-ok\n")
+    return 0
+}

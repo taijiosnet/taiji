@@ -2,7 +2,11 @@
 BIN=/$objtype/bin
 
 TARG=rio9
+ZIRANGEN=build/ziran/plan9
 OFILES=\
+	$ZIRANGEN/window_snapshot.$O\
+	$ZIRANGEN/number_text.$O\
+	$ZIRANGEN/text_buffer.$O\
 	rio.$O\
 	data.$O\
 	fsys.$O\
@@ -22,6 +26,8 @@ UPDATE=\
 	$HFILES\
 	${OFILES:%.$O=%.c}\
 
+CFLAGS=-FTVw -I$ZIRANGEN
+
 </sys/src/cmd/mkone
 
 $O.out:	/$objtype/lib/libdraw.a /$objtype/lib/libframe.a \
@@ -29,3 +35,12 @@ $O.out:	/$objtype/lib/libdraw.a /$objtype/lib/libframe.a \
 syms:V:
 	$CC -a $CFLAGS rio.c	> syms
 	$CC -aa $CFLAGS *.c 	>>syms
+
+$ZIRANGEN/window_snapshot.$O: $ZIRANGEN/window_snapshot.c
+	$CC $CFLAGS -o $target $ZIRANGEN/window_snapshot.c
+
+$ZIRANGEN/number_text.$O: $ZIRANGEN/number_text.c
+	$CC $CFLAGS -o $target $ZIRANGEN/number_text.c
+
+$ZIRANGEN/text_buffer.$O: $ZIRANGEN/text_buffer.c
+	$CC $CFLAGS -o $target $ZIRANGEN/text_buffer.c

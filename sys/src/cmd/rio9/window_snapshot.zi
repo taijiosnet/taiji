@@ -1,0 +1,65 @@
+#scope_file
+Number :: #import "number_text";
+
+Snapshot :: struct {
+    output: *s8
+    capacity: s32
+    used: s32
+    valid: bool
+}
+
+Append :: (snapshot: *Snapshot, text: string) {
+    if !snapshot.valid { return }
+    if text.count >= cast(s64)(snapshot.capacity - snapshot.used) {
+        snapshot.valid = false
+        snapshot.output[0] = 0
+        return
+    }
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        snapshot.output[snapshot.used] = cast(s8)text[index]
+        snapshot.used += 1
+        index += 1
+    }
+    snapshot.output[snapshot.used] = 0
+}
+
+AppendNumber :: (snapshot: *Snapshot, value: s32) {
+    digits: [32]u8
+    Append(snapshot, Number.FormatInteger(cast(s64)value, digits[:]))
+}
+
+#scope_export
+// A requested PID guards a control against windows whose owner changed after
+// the client's snapshot. An unguarded request retains rio's existing API.
+#program_export
+WindowPidMatches :: (expected: s32, actual: s32) -> s32 {
+    return cast(s32)(expected == 0 || (expected > 0 && expected == actual))
+}
+
+#program_export
+FormatWindowSnapshot :: (output: *s8, capacity: s32,
+    min_x: s32, min_y: s32, max_x: s32, max_y: s32,
+    current: s32, visible: s32, desktop: s32, pid: s32) -> s32 {
+    if output == null || capacity <= 0 { return 0 }
+    output[0] = 0
+    snapshot: Snapshot = .{output = output, capacity = capacity, valid = true}
+    AppendNumber(*snapshot, min_x)
+    Append(*snapshot, " ")
+    AppendNumber(*snapshot, min_y)
+    Append(*snapshot, " ")
+    AppendNumber(*snapshot, max_x)
+    Append(*snapshot, " ")
+    AppendNumber(*snapshot, max_y)
+    if current != 0 { Append(*snapshot, " current") }
+    else { Append(*snapshot, " notcurrent") }
+    if visible != 0 { Append(*snapshot, " visible") }
+    else { Append(*snapshot, " hidden") }
+    if desktop != 0 { Append(*snapshot, " desktop") }
+    else { Append(*snapshot, " window") }
+    Append(*snapshot, " pid ")
+    AppendNumber(*snapshot, pid)
+    Append(*snapshot, "\n")
+    if !snapshot.valid { return 0 }
+    return snapshot.used
+}

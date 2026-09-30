@@ -1192,19 +1192,23 @@ wpointto(Point pt)
 }
 
 static int activateid;
+static int activatepid;
 
 void
 wactivatepending(void)
 {
 	Window *w;
-	int id, j;
+	int id, pid, j;
 
 	if(mouse->buttons || activateid == 0)
 		return;
 	id = activateid;
+	pid = activatepid;
 	activateid = 0;
 	w = wlookid(id);
 	if(w == nil || w->deleted || w->i == nil || w->desktop)
+		return;
+	if(w->pid != pid)
 		return;
 	for(j=0; j<nhidden; j++)
 		if(hidden[j] == w){
@@ -1220,8 +1224,14 @@ wactivatepending(void)
 void
 wactivate(int id)
 {
+	Window *w;
+
 	/* Keep an id, not a pointer: the target may close before release. */
+	w = wlookid(id);
+	if(w == nil)
+		return;
 	activateid = id;
+	activatepid = w->pid;
 	wactivatepending();
 }
 

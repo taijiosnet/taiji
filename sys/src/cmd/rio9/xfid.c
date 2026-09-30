@@ -10,6 +10,8 @@
 #include <plumb.h>
 #include "dat.h"
 #include "fns.h"
+#define ZIR_PLAN9_NATIVE_HEADERS_INCLUDED 1
+#include "build/ziran/plan9/window_snapshot.h"
 
 #define	MAXSNARF	100*1024
 
@@ -742,12 +744,10 @@ xfidread(Xfid *x)
 
 	case Qwinfo:
 		/* A snapshot must not consume the application's wctl events. */
-		n = snprint(buf, sizeof buf, "%d %d %d %d %s %s %s\n",
+		n = FormatWindowSnapshot(buf, sizeof buf,
 			w->screenr.min.x, w->screenr.min.y,
 			w->screenr.max.x, w->screenr.max.y,
-			w == input ? "current" : "notcurrent",
-			Dx(w->screenr) > 0 ? "visible" : "hidden",
-			w->desktop ? "desktop" : "window");
+			w == input, Dx(w->screenr) > 0, w->desktop, w->pid);
 		t = estrdup(buf);
 		goto Text;
 
