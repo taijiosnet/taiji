@@ -132,6 +132,10 @@ It chooses each file's extension independently, preserves literal filenames,
 retains system applications when the user overrides only part of the registry,
 and limits Linux document translation to the normalized home directory.
 The gate also builds this command and checks its actual argv and exit status.
+Native regular-file Copy/Paste and Duplicate now use Ziran services with
+staged publication, cancellation, Skip, Keep Both, and preserved file
+permissions and modification times. Native folder transfers, Cut/Move,
+Trash, Replace, retry, and undo remain pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full

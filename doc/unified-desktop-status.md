@@ -33,6 +33,20 @@ captured the desktop, and verified failure status for missing command-line
 arguments in 177 seconds. Ziran's native output now wraps argument-bearing
 `main` functions to translate their return status into Plan 9 exit status.
 
+Native regular-file Copy/Paste and Duplicate now use Ziran services. Each
+poll advances at most 32 KiB; the destination name appears only after the
+complete copy succeeds and the source still matches its file identity,
+version, length, permissions, and modification time. Native clipboard file
+URIs preserve literal filenames, and the service supports cancellation,
+Skip, and Keep Both while preserving permissions and modification times.
+Native folder transfers, Cut/Move, Trash, Replace, retry, and undo remain
+pending and refuse unsupported operations.
+The focused native gate passed all eight source/saved checks, rebuilt the
+Rill services, and built, privately installed, and captured the actual Kryon
+desktop executable in 335 seconds. The checks include preserved file
+contents and attributes, exact clipboard filenames, cancellation, skipped
+conflicts, Keep Both, changed sources, and a destination created during copying.
+
 Private Xvfb window checks verified that the separate Settings app updates
 panel placement and clock formatting in the running hosted desktop while
 preserving recent applications. Native Settings was captured again after
@@ -41,7 +55,7 @@ applications and selected native suites; the older boot and mixed-application
 results below describe the previous desktop revision.
 
 The Ziran desktop is not yet the boot default. Remaining file services,
-native clipboard/copy/move/Trash, PNG icons,
+native folder transfers/Cut/Move/Trash/Replace/retry/undo, PNG icons,
 tray images and menus, notifications, plugin Properties, window
 management, session services, and missing native platform callbacks still
 need conversion and parity checks. The previous full C desktop depends on
