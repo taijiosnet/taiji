@@ -89,8 +89,12 @@ shell probe does not establish that the OS or desktop has been rewritten.
 
 The Rill shell, panel layouts, settings persistence, stub adapter, Plan 9
 platform services, panel clock, Run dialog, Applications menu, and Calendar
-now use Ziran implementations. The three converted screens use current
-Kryon widgets and share a native libdraw application host. Rio's
+now use Ziran implementations. A new `rill-desktop` entrypoint adds the
+current Kryon panel, live task/launcher snapshots, in-place menus, all four
+panel edges, autohide, scrolling, item moves and persistence, and available
+volume/clipboard/session controls. Native desktop overlays use only the
+client's own window namespace. The converted screens and desktop share a
+native libdraw application host. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
 behavior tests from source and saved IR through `plan9-c`, compile and link
@@ -101,10 +105,14 @@ builds rio, compiles Rill's generated service objects through its native
 `mkfile`, and runs the persistence checks through `mk test`.
 It also checks Run history, application matching, categories and recent
 launchers, Unicode editing, scrolling, session confirmation, clock formatting,
-Gregorian calendars, month navigation, and timestamps after 2038. It renders
+Gregorian calendars, month navigation, timestamps after 2038, panel editing,
+window action failures, clipboard overflow, autohide, and wheel ownership. It renders
 the converted Kryon screens with native libdraw from source and saved IR and
 compares their captures. It builds, installs into private guest directories,
-and renders the actual native Run, Applications, and Calendar executables
+and renders the actual native Run, Applications, Calendar, and desktop executables
 through their `app/*.mk` recipes.
-The graphical desktop, Rill's other services, T9's remaining
+The new desktop entrypoint is not yet the boot default: desktop files,
+Settings/About, full tray rendering and menus, plugin Properties, notifications,
+and remaining services still need conversion and parity checks. The full
+graphical desktop, Rill's other services, T9's remaining
 legacy modules, and the wider OS migration remain unfinished.

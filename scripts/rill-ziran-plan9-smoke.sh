@@ -7,7 +7,7 @@ ziran=${ZIRAN_BIN:-"$root/../../ziranlang/ziran/build/bin/ziran"}
 std=${ZIRAN_STD:-"$root/../../ziranlang/ziran/std"}
 rill=${RILL_DIR:-"$root/sys/src/cmd/rill"}
 kryon=${KRYON_DIR:-"$root/sys/src/kryon"}
-timeout=${TAIJI_RILL_ZIRAN_TIMEOUT:-900}
+timeout=${TAIJI_RILL_ZIRAN_TIMEOUT:-1200}
 log=$root/build/rill-ziran-plan9.log
 mkdir -p build usr/glenda/tmp
 exec 9>build/rill-ziran-plan9.lock
@@ -29,7 +29,7 @@ unset DISPLAY WAYLAND_DISPLAY RILL_CONTAINED_X11
 "$ziran" build --target=plan9-c --define NATIVE_PLAN9 --root "$rill/tests" \
     --module-path "$rill/src" --module-path "$std" \
     -o "$rill/build/ziran/plan9-test" "$rill/tests/persistence_test.zi" >>"$log" 2>&1
-for application in run applications calendar; do
+for application in run applications calendar desktop; do
     "$ziran" build --target=plan9-c --define NATIVE_PLAN9 --define PLAN9_BUILD \
         --root "$rill/app" --module-path "$rill/src" \
         --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" --module-path "$std" \
@@ -42,11 +42,11 @@ for source in "$rill"/build/ziran/plan9/*.c; do
     module=${source##*/}
     rill_objects="$rill_objects build/ziran/plan9/${module%.c}.8"
 done
-suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch date_time_plan9 calendar window_snapshot shell persistence platform_plan9 run run_ui applications applications_ui clock calendar_ui"}
+suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch date_time_plan9 calendar window_snapshot shell persistence platform_plan9 run run_ui applications applications_ui clock calendar_ui desktop_ui"}
 guest_suites=
 for suite in $suites; do
     case "$suite" in
-        file_plan9|process_plan9|plan9_switch|date_time_plan9|calendar|window_snapshot|shell|persistence|platform_plan9|run|run_ui|applications|applications_ui|clock|calendar_ui) ;;
+        file_plan9|process_plan9|plan9_switch|date_time_plan9|calendar|window_snapshot|shell|persistence|platform_plan9|run|run_ui|applications|applications_ui|clock|calendar_ui|desktop_ui) ;;
         *) echo "unknown native suite: $suite" >&2; exit 1 ;;
     esac
     guest_suites="$guest_suites $suite-source $suite-saved"
@@ -125,7 +125,7 @@ if(~ \$failed 0) {
         failed=1
     }
 }
-for(application in run applications calendar) {
+for(application in run applications calendar desktop) {
 if(~ \$failed 0) {
     cd /sys/src/cmd/rill
     if(mk -f app/\$application^.mk install 'BIN=$guest_stage/app-bin') {
@@ -160,13 +160,14 @@ start=$(date +%s)
 while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
     if rg -q '^rill-ziran-plan9-run-ok' "$log"; then
         stop_vm
-        for application in run applications calendar; do
+        for application in run applications calendar desktop; do
             if test ! -f "$stage/$application-app.rgba" || test "$(wc -c <"$stage/$application-app.rgba")" -ne 2304000; then
                 echo "rill-ziran-plan9: actual native $application application did not render its frame" >&2
                 exit 1
             fi
+            cp "$stage/$application-app.rgba" "$root/build/rill-$application-native.rgba"
         done
-        for suite in run_ui applications_ui calendar_ui; do
+        for suite in run_ui applications_ui calendar_ui desktop_ui; do
             case " $suites " in
                 *" $suite "*)
                     expected=576000
@@ -178,6 +179,7 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
                         fi
                     done
                     cmp "$stage/$suite-source/capture.rgba" "$stage/$suite-saved/capture.rgba"
+                    cp "$stage/$suite-source/capture.rgba" "$root/build/rill-$suite-native.rgba"
                     ;;
             esac
         done
@@ -185,7 +187,7 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
         echo "rill-ziran-plan9: ok ($(( $(date +%s) - start ))s, native 8c/8l)"
         exit 0
     fi
-    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|run|run-ui|applications|applications-ui|clock|calendar-ui)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
+    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|run|run-ui|applications|applications-ui|clock|calendar-ui|desktop-ui)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
         tail -70 "$log" >&2
         exit 1
     fi
