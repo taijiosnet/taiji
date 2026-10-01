@@ -76,11 +76,11 @@ for source in "$rill"/build/ziran/plan9/*.c; do
     module=${source##*/}
     rill_objects="$rill_objects build/ziran/plan9/${module%.c}.8"
 done
-suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch plan9_wide_compare inflate_plan9 date_time_plan9 calendar png_native png_raster window_snapshot shell persistence platform_plan9 document_open file_transfer folder_transfer trash replacement run run_ui applications applications_ui clock calendar_ui desktop_ui desktop_files_ui preferences settings_ui"}
+suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch plan9_wide_compare inflate_plan9 date_time_plan9 calendar png_native png_raster window_snapshot shell persistence platform_plan9 document_open file_transfer folder_transfer trash replacement retry run run_ui applications applications_ui clock calendar_ui desktop_ui desktop_files_ui preferences settings_ui"}
 guest_suites=
 for suite in $suites; do
     case "$suite" in
-        file_plan9|process_plan9|plan9_switch|plan9_wide_compare|inflate_plan9|date_time_plan9|calendar|png_native|png_raster|window_snapshot|shell|persistence|platform_plan9|document_open|file_transfer|folder_transfer|trash|replacement|run|run_ui|applications|applications_ui|clock|calendar_ui|desktop_ui|desktop_files_ui|preferences|settings_ui) ;;
+        file_plan9|process_plan9|plan9_switch|plan9_wide_compare|inflate_plan9|date_time_plan9|calendar|png_native|png_raster|window_snapshot|shell|persistence|platform_plan9|document_open|file_transfer|folder_transfer|trash|replacement|retry|run|run_ui|applications|applications_ui|clock|calendar_ui|desktop_ui|desktop_files_ui|preferences|settings_ui) ;;
         *) echo "unknown native suite: $suite" >&2; exit 1 ;;
     esac
     guest_suites="$guest_suites $suite-source $suite-saved"
@@ -269,7 +269,7 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
         echo "rill-ziran-plan9: ok ($(( $(date +%s) - start ))s, native 8c/8l)"
         exit 0
     fi
-    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|document-open|file-transfer|folder-transfer|trash|replacement|run|run-ui|applications|applications-ui|clock|calendar-ui|desktop-ui|desktop-files-ui|preferences|settings-ui)-test-failed|kryon-png-(native|raster)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
+    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|document-open|file-transfer|folder-transfer|trash|replacement|retry|run|run-ui|applications|applications-ui|clock|calendar-ui|desktop-ui|desktop-files-ui|preferences|settings-ui)-test-failed|kryon-png-(native|raster)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
         tail -70 "$log" >&2
         exit 1
     fi

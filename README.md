@@ -171,8 +171,15 @@ Trash before publishing without overwriting a newly created entry. It handles
 files, folders, differing types, batch choices, and Cut/Paste. Changed
 destinations and overlap with selected sources refuse replacement; cancellation
 or later publication failure leaves any completed backup recoverable in Trash.
-Retry, undo, and recovery of interrupted unpublished staging entries remain
-pending.
+Retry now retains completed and skipped items, restarts unpublished copies
+with a fresh snapshot, and verifies a published destination before resuming
+removal of unchanged source entries. Recreated source entries and changed
+copies are preserved. Folder permissions can be repaired before retrying;
+failed staging cleanup must succeed before another attempt starts. A
+replacement reuses its published Trash archive after partial removal of the
+old destination. Cut/Paste retains its original clipboard snapshot across
+retry and clears it only after complete success. Undo and recovery of
+interrupted unpublished staging entries remain pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
