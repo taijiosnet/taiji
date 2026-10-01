@@ -102,8 +102,9 @@ new desktop. Desktop file selection, icon layout persistence, group dragging,
 folder drops, context menus, rename/New Folder dialogs, and file transfer
 controls now use Ziran and Kryon. Native directory listing, private folder
 creation, renaming without overwriting, and file/folder clipboard transfers
-are implemented. Native Trash services and PNG icons still need implementation;
-the hosted transfer backend remains C. Native display/input and other missing
+are implemented. Native PNG icons now load through Kryon's `Image` surface.
+Native Trash services still need implementation, and the hosted transfer
+backend remains C. Native display/input and other missing
 services still need implementations; their controls remain unavailable. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
@@ -125,6 +126,15 @@ the converted Kryon screens with native libdraw from source and saved IR and
 compares their captures. It builds, installs into private guest directories,
 and renders the actual native Run, Applications, Calendar, Settings, About,
 and desktop executables through their `app/*.mk` recipes.
+PNG checks cover 33 independent reference images across standard color types,
+depths, filters, transparency, and Adam7 interlace, plus malformed streams,
+cache eviction, alpha composition, real desktop icons, and native Plan 9 image
+compatibility. The decoder and native image provider are current Ziran;
+bounded decompression uses Ziran's native `libflate` adapter. PNG files are
+limited to 64 MiB and 4096 pixels per axis; gamma and color profiles are ignored,
+and 16-bit samples use their high byte. Ziran's compiler regressions also cover wide
+comparisons, array initialization without adjacent stack writes, aggregate
+evaluation order, and file size queries that preserve the read cursor.
 `TAIJI_RILL_ZIRAN_SUITES` and `TAIJI_RILL_ZIRAN_APPLICATIONS` can select
 focused checks; the default runs every suite and all six applications.
 `TAIJI_RILL_ZIRAN_SUITES_ONLY=1` runs native source/saved-IR suites against an

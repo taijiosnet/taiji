@@ -76,18 +76,18 @@ for source in "$rill"/build/ziran/plan9/*.c; do
     module=${source##*/}
     rill_objects="$rill_objects build/ziran/plan9/${module%.c}.8"
 done
-suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch date_time_plan9 calendar window_snapshot shell persistence platform_plan9 document_open file_transfer folder_transfer run run_ui applications applications_ui clock calendar_ui desktop_ui desktop_files_ui preferences settings_ui"}
+suites=${TAIJI_RILL_ZIRAN_SUITES:-"file_plan9 process_plan9 plan9_switch plan9_wide_compare inflate_plan9 date_time_plan9 calendar png_native png_raster window_snapshot shell persistence platform_plan9 document_open file_transfer folder_transfer run run_ui applications applications_ui clock calendar_ui desktop_ui desktop_files_ui preferences settings_ui"}
 guest_suites=
 for suite in $suites; do
     case "$suite" in
-        file_plan9|process_plan9|plan9_switch|date_time_plan9|calendar|window_snapshot|shell|persistence|platform_plan9|document_open|file_transfer|folder_transfer|run|run_ui|applications|applications_ui|clock|calendar_ui|desktop_ui|desktop_files_ui|preferences|settings_ui) ;;
+        file_plan9|process_plan9|plan9_switch|plan9_wide_compare|inflate_plan9|date_time_plan9|calendar|png_native|png_raster|window_snapshot|shell|persistence|platform_plan9|document_open|file_transfer|folder_transfer|run|run_ui|applications|applications_ui|clock|calendar_ui|desktop_ui|desktop_files_ui|preferences|settings_ui) ;;
         *) echo "unknown native suite: $suite" >&2; exit 1 ;;
     esac
     guest_suites="$guest_suites $suite-source $suite-saved"
     source_root=$rill/tests
     input=$source_root/${suite}_test.zi
     case "$suite" in
-        file_plan9|process_plan9|plan9_switch|date_time_plan9|calendar)
+        file_plan9|process_plan9|plan9_switch|plan9_wide_compare|inflate_plan9|date_time_plan9|calendar)
             source_root=$root/../../ziranlang/ziran/tests/spec
             input=$source_root/${suite}_test.zi
             ;;
@@ -95,6 +95,10 @@ for suite in $suites; do
     if test "$suite" = window_snapshot; then
         source_root=$root/sys/src/cmd/rio9/tests
         input=$source_root/window_snapshot_test.zi
+    fi
+    if test "$suite" = png_native || test "$suite" = png_raster; then
+        source_root=$kryon/tests
+        input=$source_root/${suite}_test.zi
     fi
     "$ziran" ir --define NATIVE_PLAN9 --define PLAN9_BUILD --root "$source_root" \
         --module-path "$rill/src" --module-path "$rill/app" --module-path "$root/sys/src/cmd/rio9" \
@@ -108,6 +112,16 @@ for suite in $suites; do
         --root "$stage/$suite-ir" -o "$stage/$suite-saved" \
         "$stage/$suite-ir/${suite}_test.zir" >>"$log" 2>&1
     mkdir "$stage/$suite-source/data" "$stage/$suite-saved/data"
+    if test "$suite" = png_native || test "$suite" = png_raster; then
+        python3 "$kryon/tests/png_fixtures.py" --directory "$stage/$suite-source/data"
+        python3 "$kryon/tests/png_fixtures.py" --directory "$stage/$suite-saved/data"
+    fi
+    if test "$suite" = desktop_files_ui; then
+        for form in source saved; do
+            cp "$kryon/icons/ui.png" "$stage/$suite-$form/data/icon1.png"
+            cp "$kryon/icons/language.png" "$stage/$suite-$form/data/icon2.png"
+        done
+    fi
 done
 # Keep the filesystem primitive checks first so failures can be distinguished
 # from application parsing and interrupted-save behavior.
@@ -160,7 +174,7 @@ for(suite in $guest_suites) {
         }
     }
     if(~ \$failed 0) {
-        if(8l -o run *.8 -ldraw -lmemdraw -lthread) {
+        if(8l -o run *.8 -ldraw -lmemdraw -lthread -lflate) {
             echo rill-ziran-plan9-compile-ok
             if(RILL_TEST_ROOT=$guest_stage/\$suite/data ZIRAN_TEST_ROOT=$guest_stage/\$suite/data RILL_OPEN_BIN=$guest_stage/app-bin/rill-open KRYON_OFFSCREEN=1 KRYON_CAPTURE_PATH=$guest_stage/\$suite/capture.rgba font=/lib/font/bit/pelm/latin1.8.font ./run)
                 echo rill-ziran-plan9-suite-ok \$suite
@@ -234,10 +248,11 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
             fi
             cp "$stage/$application-app.rgba" "$root/build/rill-$application-native.rgba"
         done
-        for suite in run_ui applications_ui calendar_ui desktop_ui desktop_files_ui settings_ui; do
+        for suite in png_raster run_ui applications_ui calendar_ui desktop_ui desktop_files_ui settings_ui; do
             case " $suites " in
                 *" $suite "*)
                     expected=576000
+                    if test "$suite" = png_raster; then expected=12288; fi
                     for input in source saved; do
                         capture=$stage/$suite-$input/capture.rgba
                         if test ! -f "$capture" || test "$(wc -c <"$capture")" -ne "$expected"; then
@@ -254,7 +269,7 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
         echo "rill-ziran-plan9: ok ($(( $(date +%s) - start ))s, native 8c/8l)"
         exit 0
     fi
-    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|document-open|file-transfer|folder-transfer|run|run-ui|applications|applications-ui|clock|calendar-ui|desktop-ui|desktop-files-ui|preferences|settings-ui)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
+    if rg -q 'rill-ziran-plan9-(compile|link|run)-failed|rill-(shell|persistence|platform|document-open|file-transfer|folder-transfer|run|run-ui|applications|applications-ui|clock|calendar-ui|desktop-ui|desktop-files-ui|preferences|settings-ui)-test-failed|kryon-png-(native|raster)-test-failed|(file|process|date-time)-plan9-test-failed|plan9-switch-test-failed|calendar-test-failed|rc: .*syntax error' "$log"; then
         tail -70 "$log" >&2
         exit 1
     fi
