@@ -178,8 +178,17 @@ copies are preserved. Folder permissions can be repaired before retrying;
 failed staging cleanup must succeed before another attempt starts. A
 replacement reuses its published Trash archive after partial removal of the
 old destination. Cut/Paste retains its original clipboard snapshot across
-retry and clears it only after complete success. Undo and recovery of
-interrupted unpublished staging entries remain pending.
+retry and clears it only after complete success. Undo now retains one completed
+Copy, Duplicate, or Move batch in memory and verifies every result and
+replacement backup before changing the batch. Copied results go to Trash;
+moved results return to their original directory, recreating missing parents
+and keeping both entries when a name is occupied. Replaced destinations return
+from their verified Trash backups. Undo advances with the transfer polls and
+can be cancelled and retried after partial progress. Changed trees, redirected
+paths, and changed backups are preserved and reported. Closing the desktop
+releases the journal; another completed Copy, Duplicate, or Move batch replaces
+it. Undo does not provide Redo. Recovery of interrupted unpublished staging
+entries remains pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
