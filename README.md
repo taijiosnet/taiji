@@ -103,9 +103,10 @@ folder drops, context menus, rename/New Folder dialogs, and file transfer
 controls now use Ziran and Kryon. Native directory listing, private folder
 creation, renaming without overwriting, and file/folder clipboard transfers
 are implemented. Native PNG icons now load through Kryon's `Image` surface.
-Native Trash services still need implementation, and the hosted transfer
-backend remains C. Native display/input and other missing
-services still need implementations; their controls remain unavailable. Rio's
+Native Move to Trash, restore, and empty services now use Ziran, and the
+desktop Trash browser uses current Kryon. The hosted transfer backend remains
+C. Native display/input and other missing services still need implementations;
+their controls remain unavailable. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
 rio's native sources, then `make rill-ziran-plan9-smoke` to generate the
 behavior tests from source and saved IR through `plan9-c`, compile and link
@@ -153,7 +154,20 @@ inside the source. Moves publish the complete copy before removing source
 entries; changed or protected entries stop removal with an explicit error.
 Cut/Paste clears its unchanged clipboard selection only after every item
 moves successfully. Foreign staging entries and newer clipboard contents are
-preserved. Native Trash, Replace, retry, and undo remain pending.
+preserved. Native Move to Trash saves a checksummed recovery record and the
+complete payload before removing source entries. The current Kryon Trash
+browser shows original paths and deletion times, supports restore with
+collision-safe names, and confirms permanent emptying. Storage defaults to
+`$home/lib/rill/trash` with an absolute `RILL_TRASH_DIR` override. Each private
+entry records every copied node's identity; damaged metadata, replacement
+nodes, redirected payloads, and unknown contents are preserved and reported.
+Saved identities reanchor to the current store after a legitimate filesystem
+remount. Native source/saved-IR checks cover recovery after releasing the
+transfer, header and inventory corruption, bound payloads, cancellation before and
+after publication, and the desktop controls. The browser displays up to 64
+entries at a time; restore and empty currently run synchronously. Replace,
+retry, undo, and recovery of interrupted unpublished staging entries remain
+pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
