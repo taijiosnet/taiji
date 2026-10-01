@@ -190,6 +190,8 @@ releases the journal; another completed Copy, Duplicate, or Move batch replaces
 it. Undo does not provide Redo. Native desktop startup now recovers verified
 staging copies after their owner exits, preserving partial contents under a
 visible `(partial copy 1)` name and keeping both entries when occupied.
+Fresh homes receive an owner-only Desktop folder before recovery; existing
+folders, files, and explicitly configured desktop paths are preserved.
 Recovery uses private receipts tied to the parent, receipt, and staging root
 identities and the last checkpoint's root metadata. It skips live owners and
 preserves damaged, unrecognized, or redirected entries with an error.

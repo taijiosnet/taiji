@@ -242,6 +242,10 @@ while [ "$(( $(date +%s) - start ))" -lt "$timeout" ]; do
     if rg -q '^rill-ziran-plan9-run-ok' "$log"; then
         stop_vm
         for application in $applications; do
+            if test "$application" = desktop && test ! -d "$stage/desktop-app-home/Desktop"; then
+                echo "rill-ziran-plan9: fresh desktop directory was not initialized" >&2
+                exit 1
+            fi
             if test ! -f "$stage/$application-app.rgba" || test "$(wc -c <"$stage/$application-app.rgba")" -ne 2304000; then
                 echo "rill-ziran-plan9: actual native $application application did not render its frame" >&2
                 exit 1
