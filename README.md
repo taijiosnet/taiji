@@ -187,8 +187,16 @@ from their verified Trash backups. Undo advances with the transfer polls and
 can be cancelled and retried after partial progress. Changed trees, redirected
 paths, and changed backups are preserved and reported. Closing the desktop
 releases the journal; another completed Copy, Duplicate, or Move batch replaces
-it. Undo does not provide Redo. Recovery of interrupted unpublished staging
-entries remains pending.
+it. Undo does not provide Redo. Native desktop startup now recovers verified
+staging copies after their owner exits, preserving partial contents under a
+visible `(partial copy 1)` name and keeping both entries when occupied.
+Recovery uses private receipts tied to the parent, receipt, and staging root
+identities and the last checkpoint's root metadata. It skips live owners and
+preserves damaged, unrecognized, or redirected entries with an error.
+Leftover receipts after publication can be
+removed without changing the completed destination. It scans the requested
+directory, does not resume interrupted moves or search nested Trash entries,
+and does not persist the Undo journal. Recovered copies may be incomplete.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
