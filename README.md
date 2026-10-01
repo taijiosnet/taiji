@@ -147,7 +147,7 @@ retains system applications when the user overrides only part of the registry,
 and limits Linux document translation to the normalized home directory.
 The gate also builds this command and checks its actual argv and exit status.
 Native file and folder Copy/Paste, Duplicate, Move, and Cut/Paste now use
-Ziran services with staged publication, cancellation, Skip, Keep Both, and
+Ziran services with staged publication, cancellation, Skip, Keep Both, Replace, and
 preserved permissions and modification times. Folder copies include hidden
 entries and empty directories and reject recursive bindings and destinations
 inside the source. Moves publish the complete copy before removing source
@@ -165,8 +165,13 @@ Saved identities reanchor to the current store after a legitimate filesystem
 remount. Native source/saved-IR checks cover recovery after releasing the
 transfer, header and inventory corruption, bound payloads, cancellation before and
 after publication, and the desktop controls. The browser displays up to 64
-entries at a time; restore and empty currently run synchronously. Replace,
-retry, undo, and recovery of interrupted unpublished staging entries remain
+entries at a time; restore and empty currently run synchronously. Replace
+stages the incoming entry completely and preserves the old destination in
+Trash before publishing without overwriting a newly created entry. It handles
+files, folders, differing types, batch choices, and Cut/Paste. Changed
+destinations and overlap with selected sources refuse replacement; cancellation
+or later publication failure leaves any completed backup recoverable in Trash.
+Retry, undo, and recovery of interrupted unpublished staging entries remain
 pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
