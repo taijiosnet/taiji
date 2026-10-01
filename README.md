@@ -101,8 +101,8 @@ Saved desktop preferences and panel layouts reload without restarting the
 new desktop. Desktop file selection, icon layout persistence, group dragging,
 folder drops, context menus, rename/New Folder dialogs, and file transfer
 controls now use Ziran and Kryon. Native directory listing, private folder
-creation, and renaming without overwriting are implemented. Native file
-clipboard/transfer/Trash services and PNG icons still need implementation;
+creation, renaming without overwriting, and file/folder clipboard transfers
+are implemented. Native Trash services and PNG icons still need implementation;
 the hosted transfer backend remains C. Native display/input and other missing
 services still need implementations; their controls remain unavailable. Rio's
 window snapshot and PID ownership check also use Ziran. Run `make rio-ziran-plan9` to generate
@@ -127,15 +127,23 @@ and renders the actual native Run, Applications, Calendar, Settings, About,
 and desktop executables through their `app/*.mk` recipes.
 `TAIJI_RILL_ZIRAN_SUITES` and `TAIJI_RILL_ZIRAN_APPLICATIONS` can select
 focused checks; the default runs every suite and all six applications.
+`TAIJI_RILL_ZIRAN_SUITES_ONLY=1` runs native source/saved-IR suites against an
+upstream `RILL_DIR` before integrating its commit. This mode omits downstream
+service builds and application captures; the default gate verifies those too.
 The native `rill-open` command and desktop share the Ziran document resolver.
 It chooses each file's extension independently, preserves literal filenames,
 retains system applications when the user overrides only part of the registry,
 and limits Linux document translation to the normalized home directory.
 The gate also builds this command and checks its actual argv and exit status.
-Native regular-file Copy/Paste and Duplicate now use Ziran services with
-staged publication, cancellation, Skip, Keep Both, and preserved file
-permissions and modification times. Native folder transfers, Cut/Move,
-Trash, Replace, retry, and undo remain pending.
+Native file and folder Copy/Paste, Duplicate, Move, and Cut/Paste now use
+Ziran services with staged publication, cancellation, Skip, Keep Both, and
+preserved permissions and modification times. Folder copies include hidden
+entries and empty directories and reject recursive bindings and destinations
+inside the source. Moves publish the complete copy before removing source
+entries; changed or protected entries stop removal with an explicit error.
+Cut/Paste clears its unchanged clipboard selection only after every item
+moves successfully. Foreign staging entries and newer clipboard contents are
+preserved. Native Trash, Replace, retry, and undo remain pending.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
