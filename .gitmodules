@@ -7,13 +7,13 @@
 	url = https://github.com/waozixyz/inbe.git
 [submodule "sys/src/t9"]
 	path = sys/src/t9
-	url = https://github.com/kryonlabs/t9.git
+	url = https://github.com/taijiosnet/t9.git
 [submodule "sys/src/shelf"]
 	path = sys/src/shelf
 	url = https://github.com/kryonlabs/shelf.git
 [submodule "sys/src/cmd/rill"]
 	path = sys/src/cmd/rill
-	url = https://github.com/kryonlabs/rill.git
+	url = https://github.com/taijiosnet/rill.git
 	branch = master
 [submodule "sys/src/pass"]
 	path = sys/src/pass
