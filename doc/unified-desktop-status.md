@@ -100,7 +100,7 @@ Kryon. The wider OS rewrite also remains incomplete.
   rendered Rill desktop; `q9` runs QEMU under `nice` by default
   (`Q9_QEMU_NICE=` disables) so development boots do not compete for
   CPU.
-- The terminal application is **t9** (renamed from ktrem, hosted
+- The terminal application is **Terminal** (stable command `t9`, formerly ktrem, hosted
   directly in Rill); the desktop submodules track kryon and rill
   master.
 

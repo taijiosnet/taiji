@@ -7,7 +7,7 @@
 	url = https://github.com/waozixyz/inbe.git
 [submodule "sys/src/t9"]
 	path = sys/src/t9
-	url = https://github.com/taijiosnet/t9.git
+	url = https://github.com/kryonlabs/terminal.git
 [submodule "sys/src/shelf"]
 	path = sys/src/shelf
 	url = https://github.com/kryonlabs/shelf.git

@@ -8,7 +8,7 @@ TaijiOS is Kryon Labs' flagship operating system: a bootable desktop OS
 tree based on the 9legacy branch of Plan 9 from Bell Labs, with Kryon
 applications preinstalled as the default working environment.
 
-The tree includes Shelf, Rill, t9, Inner Breeze, Pass, and the
+The tree includes Shelf, Rill, Terminal, Inner Breeze, Pass, and the
 supporting Kryon runtime work needed to boot them together inside
 TaijiOS. See [README](README) for the historical upstream README file.
 
@@ -18,7 +18,7 @@ TaijiOS is the integration target for the Kryon application stack:
 
 - Shelf provides the file manager and desktop file surfaces.
 - Rill provides the graphical shell and application launcher.
-- t9 provides the Terminal app.
+- Terminal provides the terminal app (stable command and submodule ID `t9`).
 - Inner Breeze provides breathing, meditation, and habit tracking.
 - Pass provides stateless password generation.
 - Kryon provides the shared UI/runtime layer used by the applications.
@@ -202,5 +202,5 @@ and does not persist the Undo journal. Recovered copies may be incomplete.
 The new desktop entrypoint is not yet the boot default: remaining file services,
 full tray rendering and menus, plugin Properties, notifications,
 and remaining services still need conversion and parity checks. The full
-graphical desktop, Rill's other services, T9's remaining
+graphical desktop, Rill's other services, Terminal's remaining
 legacy modules, and the wider OS migration remain unfinished.

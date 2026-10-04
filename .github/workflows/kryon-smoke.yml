@@ -2,7 +2,7 @@ name: Kryon Smoke
 
 # Native Plan 9 build check for the Kryon library: boots the tree under
 # QEMU, rebuilds libkryon.a with 8c, compiles+links+runs the probe from
-# scripts/kryon-probe.c, and links Rill (which embeds t9 and shelf).
+# scripts/kryon-probe.c, and links Rill (which embeds Terminal and Shelf).
 # This is what catches kryon master regressions that only appear on the
 # native compiler.
 
