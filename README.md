@@ -1,5 +1,17 @@
 # TaijiOS
 
+## Current direction: all-Ziran TaijiOS
+
+The authoritative new plan is a capability-based microkernel OS written entirely
+in Ziran, using Kryon for its interface. Start with the [foundation index](doc/foundation.md)
+for architecture, cited research, feasibility gaps and the staged roadmap.
+These are planning documents, not a completed OS implementation.
+
+## Historical Plan 9 integration
+
+The material below is preserved reference for the previous TaijiOS tree and
+migration. It does not define the new kernel or relax the all-Ziran target.
+
 [![Cloudflare Pages](https://github.com/taijiosnet/taiji/actions/workflows/pages.yml/badge.svg)](https://github.com/taijiosnet/taiji/actions/workflows/pages.yml)
 
 ![TaijiOS desktop banner](site/assets/taijios-banner.png)
